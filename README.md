@@ -31,6 +31,15 @@ A hands-on course that builds up TLS from its cryptographic primitives. Each les
 |---|-------|------|-------|
 | 7 | [Encrypted Echo Server](src/bin/7-echo-server.md) | [server](src/bin/7-echo-server.rs) / [client](src/bin/7-echo-client.rs) | Combines lessons 2+4+5 into a working encrypted channel |
 | 8 | [Authenticated Echo Server](src/bin/8-echo-server.md) | [genkey](src/bin/8-genkey.rs) / [server](src/bin/8-echo-server.rs) / [client](src/bin/8-echo-client.rs) | Signs the handshake to prevent MITM (adds lessons 3+6) |
+| 9 | [Mutual TLS (mTLS)](src/bin/9-mtls.md) | [genkeys](src/bin/9-mtls-genkeys.rs) / [server](src/bin/9-mtls-server.rs) / [client](src/bin/9-mtls-client.rs) | Both sides authenticate each other |
+| 10 | [Replay Attack Defense](src/bin/10-replay.md) | [server](src/bin/10-replay-server.rs) / [client](src/bin/10-replay-client.rs) | Counter nonces prevent replay and reordering |
+
+### Phase 4: Real TLS
+
+| # | Topic | Code | Notes |
+|---|-------|------|-------|
+| 11 | [Real TLS (tokio-rustls)](src/bin/11-real-tls.md) | [server](src/bin/11-real-tls-server.rs) / [client](src/bin/11-real-tls-client.rs) | Production TLS — see how your hand-built protocol maps to the real thing |
+| 12 | [HTTPS Client](src/bin/12-https-client.md) | [12-https-client.rs](src/bin/12-https-client.rs) | Connect to real websites over TLS, the full circle |
 
 ## How it all connects
 
@@ -48,6 +57,12 @@ Lesson 7: Encrypted channel (DH + HKDF + ChaCha20)
 Lesson 6: Certificates ───►│
                            ▼
 Lesson 8: Authenticated channel (+ signatures + certs)
+Lesson 9: Mutual authentication (both sides prove identity)
+Lesson 10: Replay defense (counter nonces)
+                           │
+                           ▼
+Lesson 11: Real TLS (tokio-rustls does it all)
+Lesson 12: HTTPS client (connect to the real internet)
 ```
 
 ## Running
@@ -69,4 +84,20 @@ cargo run --bin 7-echo-client
 cargo run --bin 8-genkey
 cargo run --bin 8-echo-server
 cargo run --bin 8-echo-client
+
+# Mutual TLS (generate both keys first, then two terminals)
+cargo run --bin 9-mtls-genkeys
+cargo run --bin 9-mtls-server
+cargo run --bin 9-mtls-client
+
+# Replay defense (two terminals)
+cargo run --bin 10-replay-server
+cargo run --bin 10-replay-client
+
+# Real TLS echo server (two terminals)
+cargo run --bin 11-real-tls-server
+cargo run --bin 11-real-tls-client
+
+# HTTPS client (connects to example.com)
+cargo run --bin 12-https-client
 ```
