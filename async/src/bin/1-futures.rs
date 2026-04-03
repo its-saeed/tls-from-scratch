@@ -28,7 +28,7 @@ struct CountdownFuture {
 impl Future for CountdownFuture {
     type Output = ();
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
         // TODO:
         // 1. Get a mutable reference to self (Pin::get_mut is safe for Unpin types)
         // 2. If count > 0: decrement count, call cx.waker().wake_by_ref(), return Pending
@@ -36,7 +36,14 @@ impl Future for CountdownFuture {
         //
         // Why wake_by_ref()? It tells the executor "I have more work, poll me again."
         // Without it, the executor would never re-poll and the future hangs.
-        todo!("Implement CountdownFuture::poll")
+        match self.count {
+            0 => Poll::Ready(()),
+            _ => {
+                self.count -= 1;
+                cx.waker().wake_by_ref();
+                Poll::Pending
+            }
+        }
     }
 }
 
@@ -48,37 +55,18 @@ impl Future for CountdownFuture {
 /// This is what std::future::ready() does internally.
 struct ReadyFuture<T>(Option<T>);
 
-impl<T> Future for ReadyFuture<T> {
+impl<T: Unpin> Future for ReadyFuture<T> {
     type Output = T;
 
-    fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<T> {
+    fn poll(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<T> {
         // TODO:
         // 1. Take the value out of the Option (self.get_mut().0.take())
         // 2. If Some(value): return Ready(value)
         // 3. If None: panic — this means poll was called after Ready (contract violation)
-        todo!("Implement ReadyFuture::poll")
-    }
-}
-
-// ============================================================
-// Future #3: DelayFuture
-// ============================================================
-
-/// A future that returns Pending for `polls_remaining` polls,
-/// then returns Ready(message).
-struct DelayFuture {
-    polls_remaining: u32,
-    message: String,
-}
-
-impl Future for DelayFuture {
-    type Output = String;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<String> {
-        // TODO:
-        // 1. If polls_remaining > 0: decrement, wake, return Pending
-        // 2. If polls_remaining == 0: return Ready(message.clone())
-        todo!("Implement DelayFuture::poll")
+        match self.0.take() {
+            Some(v) => Poll::Ready(v),
+            None => panic!("Poll called after ready"),
+        }
     }
 }
 
@@ -130,8 +118,6 @@ enum Command {
     Countdown { n: u32 },
     /// Poll a ReadyFuture that returns immediately
     Ready,
-    /// Poll a DelayFuture that waits n polls then returns a message
-    Delay { n: u32, message: String },
     /// Run all demos
     All,
 }
@@ -159,33 +145,16 @@ fn demo_ready() {
     println!("This is what std::future::ready() does.");
 }
 
-fn demo_delay(n: u32, message: &str) {
-    println!("=== DelayFuture (polls={n}, message=\"{message}\") ===");
-    println!("Polling a future that delays for {n} polls...");
-    println!();
-    let future = DelayFuture {
-        polls_remaining: n,
-        message: message.to_string(),
-    };
-    let msg = poll_to_completion("delay", future);
-    println!("Got message: \"{msg}\"");
-    println!();
-    println!("Takeaway: simulates a future waiting for I/O ({n} polls = {n} cycles).");
-}
-
 fn main() {
     let cli = Cli::parse();
 
     match cli.command {
         Command::Countdown { n } => demo_countdown(n),
         Command::Ready => demo_ready(),
-        Command::Delay { n, message } => demo_delay(n, &message),
         Command::All => {
             demo_countdown(5);
             println!();
             demo_ready();
-            println!();
-            demo_delay(3, "data arrived from network");
         }
     }
 }
@@ -237,30 +206,4 @@ mod tests {
         let _ = poll_once(&mut future); // second poll: should panic
     }
 
-    #[test]
-    fn delay_future_waits_then_returns() {
-        let mut future = DelayFuture {
-            polls_remaining: 2,
-            message: "hello".to_string(),
-        };
-
-        assert!(poll_once(&mut future).is_pending(), "2 polls remaining → Pending");
-        assert!(poll_once(&mut future).is_pending(), "1 poll remaining → Pending");
-        match poll_once(&mut future) {
-            Poll::Ready(msg) => assert_eq!(msg, "hello"),
-            Poll::Pending => panic!("Should be Ready after 2 delays"),
-        }
-    }
-
-    #[test]
-    fn delay_zero_is_immediately_ready() {
-        let mut future = DelayFuture {
-            polls_remaining: 0,
-            message: "instant".to_string(),
-        };
-        match poll_once(&mut future) {
-            Poll::Ready(msg) => assert_eq!(msg, "instant"),
-            Poll::Pending => panic!("0 delay should be immediate"),
-        }
-    }
 }

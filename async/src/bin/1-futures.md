@@ -200,20 +200,7 @@ struct ReadyFuture<T>(Option<T>);
 
 This is what `std::future::ready(42)` does internally.
 
-### Exercise 3: DelayFuture
-
-Implement a future that returns `Pending` for a specified number of polls, then returns `Ready` with a message:
-
-```rust
-struct DelayFuture {
-    polls_remaining: u32,
-    message: String,
-}
-```
-
-This simulates a future that takes "time" (polls) to complete, like waiting for I/O.
-
-### Exercise 4: Poll manually
+### Exercise 3: Poll manually
 
 Don't use any executor. Use the noop waker to manually poll futures in a loop:
 
