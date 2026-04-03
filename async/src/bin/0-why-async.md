@@ -147,8 +147,10 @@ conn, _ = s.accept()
 print('connected:', conn.recv(1024))
 " &
 
-# In another terminal, trace the syscalls
-sudo dtruss -p <pid> 2>&1 | grep -E 'kevent|kqueue|read|accept'
+# Find its PID and trace the syscalls
+lsof -i :9999                          # find which process is on port 9999
+pgrep -f "python3"                     # or find PID by process name
+sudo dtruss -p $(pgrep -f "python3") 2>&1 | grep -E 'kevent|kqueue|read|accept'
 # You'll see: kqueue(), kevent() — the OS event notification API
 ```
 
