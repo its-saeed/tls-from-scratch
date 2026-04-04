@@ -1,19 +1,48 @@
-# Lesson 19: Task-Local Storage — tokio::task::LocalKey
+# Lesson 20: Task-Local Storage — tokio::task::LocalKey
 
-## What you'll learn
+> **Prerequisites**: Lesson 4 (tasks), Lesson 14 (work-stealing).
 
-- Why thread-locals break in async code (tasks migrate between threads)
-- How `task_local!` provides per-task storage
-- Scoping task-local values with `.scope()`
-- Practical patterns: request IDs, trace context, database transactions
+## Real-life analogy: name tags at a conference
 
-## Key concepts
+```
+┌───────────────────────────────────────────────────────────────┐
+│  Conference Venue                                             │
+│                                                               │
+│  Thread-locals = room assignments:                            │
+│    Room A has whiteboard "Project X"                          │
+│    Room B has whiteboard "Project Y"                          │
+│    If attendee MOVES rooms → sees wrong whiteboard!           │
+│                                                               │
+│  Task-locals = name tags on each person:                      │
+│    Alice wears "Request #42"                                  │
+│    Bob wears "Request #99"                                    │
+│    No matter which room they walk into,                       │
+│    their name tag follows them.                               │
+│                                                               │
+│  In async: tasks migrate between OS threads (rooms).          │
+│  Thread-locals follow the room. Task-locals follow the task.  │
+└───────────────────────────────────────────────────────────────┘
+```
 
-### The problem with thread-locals
+## The problem with thread-locals in async
 
-In a multi-thread runtime, a task may resume on a different OS thread after an `.await`. Thread-local storage follows the thread, not the task, so values appear to change randomly.
+```
+Thread 1              Thread 2
+┌────────────┐        ┌────────────┐
+│ TLS: "abc" │        │ TLS: "xyz" │
+│            │        │            │
+│ Task A     │        │            │
+│  reads TLS │        │            │
+│  → "abc"   │        │            │
+│  .await    │───────►│ Task A     │   (work-stealing moved it!)
+│            │        │  reads TLS │
+│            │        │  → "xyz"   │   WRONG! Expected "abc"
+└────────────┘        └────────────┘
+```
 
-### task_local! macro
+In a multi-thread tokio runtime, a task can resume on **any** worker thread after `.await`. Thread-local values belong to the thread, not the task.
+
+## task_local! to the rescue
 
 ```rust
 tokio::task_local! {
@@ -22,35 +51,89 @@ tokio::task_local! {
 
 async fn handle_request(id: String) {
     REQUEST_ID.scope(id, async {
-        // anywhere inside this scope:
-        REQUEST_ID.with(|id| println!("request: {id}"));
-        do_work().await; // task-local survives .await
+        // Value is set for the duration of this future
+        do_work().await;        // survives .await
+        do_more_work().await;   // still correct
     }).await;
+}
+
+async fn do_work() {
+    REQUEST_ID.with(|id| {
+        println!("Processing request: {id}");
+    });
 }
 ```
 
-### Scoping rules
+## Scoping rules
 
-- `LocalKey::scope(value, future)` — sets the value for the duration of the future
-- `LocalKey::with(|v| ...)` — access the current value (panics if not in scope)
-- `LocalKey::try_with(|v| ...)` — returns `Err` if not in scope
+```
+REQUEST_ID.scope("req-42", async {
+    │
+    │  REQUEST_ID.with(|id| ...)    → Ok("req-42")
+    │
+    │  REQUEST_ID.scope("req-99", async {   // nested: shadows outer
+    │      │
+    │      │  REQUEST_ID.with(|id| ...)  → Ok("req-99")
+    │      │
+    │  }).await;
+    │
+    │  REQUEST_ID.with(|id| ...)    → Ok("req-42")  (restored)
+    │
+}).await;
 
-### Common patterns
+// Outside any scope:
+REQUEST_ID.with(|id| ...)           → PANIC!
+REQUEST_ID.try_with(|id| ...)       → Err(AccessError)
+```
 
-- **Request ID propagation** — set once at request entry, read in all handlers
-- **Trace context** — propagate span context through async call chains
-- **Database transaction** — pass transaction handle without threading through every function
+## Key limitations
 
-### Limitations
+| Limitation | Why |
+|-----------|-----|
+| No `set()` method | Values are immutable within a scope |
+| Not inherited by child tasks | `tokio::spawn` creates a fresh context |
+| Must use `.scope()` | Cannot set from outside an async context |
+| One value per scope | Nesting shadows, does not merge |
 
-- Cannot be set from outside `.scope()` — no `set()` method
-- The value is not shared between parent and spawned child tasks
-- Each `.scope()` creates a new binding; nesting shadows the outer one
+### Child tasks do NOT inherit
+
+```rust
+REQUEST_ID.scope("req-42".into(), async {
+    tokio::spawn(async {
+        // PANIC! REQUEST_ID is not set here.
+        REQUEST_ID.with(|id| println!("{id}"));
+    }).await;
+}).await;
+```
+
+You must explicitly pass values to child tasks via `.scope()` or function arguments.
+
+## Common patterns
+
+### Request ID propagation
+
+```rust
+task_local! { static REQ_ID: u64; }
+
+async fn middleware(req_id: u64, handler: impl Future<Output = ()>) {
+    REQ_ID.scope(req_id, handler).await;
+}
+
+async fn log_something() {
+    REQ_ID.with(|id| println!("[req={id}] doing something"));
+}
+```
 
 ## Exercises
 
-1. Define a `REQUEST_ID` task-local and verify it survives across `.await` points
-2. Spawn 10 tasks each with a unique task-local value; print from inside each to confirm isolation
-3. Demonstrate that `std::thread_local!` gives wrong results in multi-thread Tokio
-4. Build a middleware-like pattern that sets a request ID task-local before calling a handler
-5. Show that a child task spawned with `tokio::spawn` does NOT inherit the parent's task-local
+### Exercise 1: Task-local survives .await
+
+Define a `REQUEST_ID` task-local. Set it with `.scope()`, call an async function that reads it after an `.await` point. Verify the value is correct.
+
+### Exercise 2: Isolation between tasks
+
+Spawn 10 tasks, each with a unique task-local value. Each task prints its value after a `yield_now()`. Verify no task sees another's value.
+
+### Exercise 3: Child task does NOT inherit
+
+Demonstrate that `tokio::spawn` inside a `.scope()` does NOT have access to the parent's task-local. Use `try_with` to show it returns `Err`.

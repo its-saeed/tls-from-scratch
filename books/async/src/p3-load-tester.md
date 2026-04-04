@@ -1,48 +1,85 @@
 # Project 3: HTTP Load Tester (mini wrk/hey)
 
-## What you'll learn
+> **Combines**: Lessons 18-22 (tokio::sync, tokio::net, task-locals, graceful shutdown, tracing).
 
-- Building a real concurrent CLI tool with Tokio
-- Controlling concurrency with `Semaphore`
-- Graceful Ctrl+C handling with `CancellationToken`
-- Collecting and reporting latency statistics (p50, p90, p99)
+## What you'll build
 
-## Specification
+A CLI tool that hammers an HTTP endpoint, controls concurrency with a Semaphore, handles Ctrl+C gracefully, propagates request IDs via task-locals, and reports latency percentiles.
 
-### CLI interface
+## Architecture
+
+```
+┌───────────────────────────────────────────────────────────────┐
+│  load-tester --url http://example.com --requests 100 -c 10   │
+└──────────────────────────┬────────────────────────────────────┘
+                           │
+                    ┌──────▼──────┐
+                    │  CLI Parser │ (clap)
+                    │  --url      │
+                    │  --requests │
+                    │  --concurrency│
+                    └──────┬──────┘
+                           │
+              ┌────────────┼────────────┐
+              │            │            │
+     ┌────────▼───┐  ┌────▼─────┐  ┌──▼──────────┐
+     │ Semaphore  │  │ Shutdown │  │ Result       │
+     │ (c permits)│  │ (Notify) │  │ Collector    │
+     │            │  │ Ctrl+C   │  │ (Mutex<Vec>) │
+     └────────┬───┘  └────┬─────┘  └──┬──────────┘
+              │            │           │
+              └────────────┼───────────┘
+                           │
+              ┌────────────▼────────────────┐
+              │  for each request 1..N:      │
+              │    tokio::spawn {            │
+              │      acquire semaphore       │
+              │      set task-local req_id   │
+              │      select! {               │
+              │        shutdown => return    │
+              │        send_request => {     │
+              │          record latency      │
+              │          record status       │
+              │        }                     │
+              │      }                       │
+              │    }                         │
+              └────────────┬────────────────┘
+                           │
+                    ┌──────▼──────┐
+                    │  Report     │
+                    │  p50, p90   │
+                    │  p99, max   │
+                    │  throughput │
+                    │  status map │
+                    └─────────────┘
+```
+
+## CLI interface
 
 ```
 load-tester --url https://example.com/api --requests 1000 --concurrency 50
 ```
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--url` | required | Target URL |
-| `--requests` | 100 | Total number of requests |
-| `--concurrency` | 10 | Max concurrent requests |
+| Flag | Short | Default | Description |
+|------|-------|---------|-------------|
+| `--url` | `-u` | required | Target URL |
+| `--requests` | `-n` | 100 | Total requests to send |
+| `--concurrency` | `-c` | 10 | Max concurrent requests |
 
-### Architecture
-
-```
-main()
- +-- parse CLI args (clap)
- +-- create Semaphore(concurrency)
- +-- create CancellationToken
- +-- spawn signal handler (Ctrl+C -> cancel token)
- +-- spawn N request tasks, each:
- |    +-- acquire semaphore permit
- |    +-- select! { cancelled, send_request }
- |    +-- record latency + status
- +-- collect results
- +-- print report
-```
-
-### Output report
+## Sample output
 
 ```
-Requests:     1000 total, 985 succeeded, 15 failed
-Duration:     2.34s
-Throughput:   427.35 req/s
+Target: https://example.com/api
+Requests: 1000, Concurrency: 50
+
+Running...  [1000/1000] done
+
+Results:
+  Total:      1000 requests
+  Succeeded:  985
+  Failed:     15
+  Duration:   2.34s
+  Throughput: 427.35 req/s
 
 Latency:
   p50:    4.2ms
@@ -55,18 +92,68 @@ Status codes:
   503: 15
 ```
 
-## Key concepts
+## Key implementation details
 
-- **Semaphore for concurrency** — each request acquires a permit before sending
-- **CancellationToken** — Ctrl+C triggers cancellation; in-flight requests finish, no new ones start
-- **Latency collection** — store `Duration` per request, sort, pick percentiles
-- **HTTP client** — use `reqwest` or raw `hyper`; reuse the client for connection pooling
+### Concurrency with Semaphore
+
+```rust
+let sem = Arc::new(Semaphore::new(concurrency));
+for i in 0..total_requests {
+    let permit = sem.clone().acquire_owned().await?;
+    tokio::spawn(async move {
+        let result = send_request(&url).await;
+        drop(permit); // release slot
+        result
+    });
+}
+```
+
+### Latency percentiles
+
+```rust
+fn percentile(sorted: &[Duration], p: f64) -> Duration {
+    let idx = ((sorted.len() as f64) * p / 100.0) as usize;
+    sorted[idx.min(sorted.len() - 1)]
+}
+```
+
+### Graceful Ctrl+C
+
+```rust
+let shutdown = Arc::new(Notify::new());
+tokio::spawn({
+    let s = shutdown.clone();
+    async move {
+        tokio::signal::ctrl_c().await.ok();
+        s.notify_waiters();
+    }
+});
+```
+
+### Making HTTP requests with raw TCP
+
+Since we don't have `reqwest`, we use raw `TcpStream` with minimal HTTP/1.1:
+
+```rust
+async fn http_get(url: &str) -> Result<(u16, Duration)> {
+    let start = Instant::now();
+    let mut stream = TcpStream::connect((host, port)).await?;
+    stream.write_all(format!("GET {path} HTTP/1.1\r\nHost: {host}\r\n\r\n").as_bytes()).await?;
+    // Read response, parse status code
+    Ok((status_code, start.elapsed()))
+}
+```
 
 ## Exercises
 
-1. Implement the basic load tester with the CLI interface above
-2. Add `--duration` mode: send requests for N seconds instead of a fixed count
-3. Add `--method` and `--body` flags for POST/PUT testing
-4. Print a live progress bar showing completed/total requests
-5. Add a `--rate` flag for fixed request-per-second rate limiting (token bucket)
-6. Export results as JSON with `--output json`
+### Exercise 1: Basic load tester
+
+Implement the full load tester with Semaphore-based concurrency, latency collection, and percentile reporting. Use raw TCP for HTTP requests.
+
+### Exercise 2: Ctrl+C graceful shutdown
+
+Add `tokio::signal::ctrl_c()` handling. On Ctrl+C, stop spawning new requests, let in-flight ones finish, then print partial results.
+
+### Exercise 3: Live progress reporting
+
+Print a progress line that updates every 100ms showing completed/total requests and current throughput. Use a separate task with `tokio::time::interval`.

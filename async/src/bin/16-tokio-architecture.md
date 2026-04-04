@@ -1,51 +1,233 @@
-# Lesson 15: Tokio Architecture — Runtime Builder, current_thread vs multi_thread, Driver
+# Lesson 16: Tokio Architecture
 
-## What you'll learn
+> **Prerequisites**: Courses 1-2. You've built your own runtime — now see how the production one is designed.
 
-- How Tokio's runtime is structured internally
-- The difference between `current_thread` and `multi_thread` runtimes
-- How the driver layer (I/O, time, signal) integrates with the scheduler
-- Configuring the runtime via `Builder`
+## Real-life analogy: a factory
 
-## Key concepts
+```
+┌──────────────────────────────────────────────────────────┐
+│  Factory (Tokio Runtime)                                 │
+│                                                          │
+│  ┌────────────────────────────────────────────────────┐  │
+│  │  Factory Floor (Scheduler)                         │  │
+│  │                                                    │  │
+│  │  ┌──────────┐ ┌──────────┐ ┌──────────┐          │  │
+│  │  │ Worker 1 │ │ Worker 2 │ │ Worker 3 │          │  │
+│  │  │ (thread) │ │ (thread) │ │ (thread) │          │  │
+│  │  └──────────┘ └──────────┘ └──────────┘          │  │
+│  │                                                    │  │
+│  │  Work-stealing: idle workers take from busy ones   │  │
+│  └────────────────────────┬───────────────────────────┘  │
+│                           │                              │
+│  ┌────────────────────────▼───────────────────────────┐  │
+│  │  Utility Room (Drivers)                            │  │
+│  │                                                    │  │
+│  │  ┌──────────┐ ┌──────────┐ ┌──────────┐          │  │
+│  │  │ I/O      │ │ Timer    │ │ Signal   │          │  │
+│  │  │ Driver   │ │ Driver   │ │ Driver   │          │  │
+│  │  │ (mio)    │ │ (wheel)  │ │ (unix)   │          │  │
+│  │  └──────────┘ └──────────┘ └──────────┘          │  │
+│  │                                                    │  │
+│  │  Handles external events → wakes tasks             │  │
+│  └────────────────────────────────────────────────────┘  │
+│                                                          │
+│  Front Office: Runtime::block_on(), spawn(), Handle      │
+└──────────────────────────────────────────────────────────┘
+```
 
-### Runtime structure
+The factory has:
+- **Workers** (threads) on the factory floor processing tasks
+- A **utility room** (drivers) that monitors external events (power, deliveries, alarms)
+- A **front office** (API) where you submit work orders
 
-Tokio's runtime has three main components:
-1. **Scheduler** — decides which tasks run and on which threads
-2. **Driver** — reacts to external events (I/O readiness, timer expiry, signals)
-3. **Resource drivers** — I/O driver (wraps mio), time driver, signal driver
+## Tokio's internal structure
 
-### current_thread vs multi_thread
+```
+tokio::runtime::Runtime
+  │
+  ├── Scheduler
+  │     ├── current_thread::Scheduler (single-threaded)
+  │     └── multi_thread::Scheduler (work-stealing)
+  │           ├── Worker 0 (thread + local queue)
+  │           ├── Worker 1
+  │           └── Worker N
+  │
+  ├── Driver (layered)
+  │     ├── Signal Driver (outermost)
+  │     │     └── Time Driver
+  │     │           └── I/O Driver (innermost, wraps mio::Poll)
+  │     │
+  │     │  Each park() call propagates down:
+  │     │    signal.park() → time.park() → io.park() → mio.poll()
+  │     │
+  │     │  On return, each layer checks its events:
+  │     │    mio events → wake I/O tasks
+  │     │    expired timers → wake timer tasks
+  │     │    signals → wake signal listeners
+  │
+  └── Handle (cloneable, Send + Sync)
+        ├── spawn() — submit a task from anywhere
+        ├── block_on() — enter the runtime on current thread
+        └── spawn_blocking() — run sync code on a dedicated thread pool
+```
 
-| Aspect | `current_thread` | `multi_thread` |
-|--------|-------------------|----------------|
-| Threads | 1 | N (default: CPU cores) |
-| Work stealing | No | Yes |
-| `Send` requirement | Not required for `spawn_local` | Required for `spawn` |
-| Best for | Tests, simple apps, WASM | Production servers |
+## current_thread vs multi_thread
 
-### Runtime Builder
+```
+current_thread:                      multi_thread:
+┌──────────────────┐                 ┌──────────────────┐
+│  One thread      │                 │  N threads       │
+│                  │                 │                  │
+│  ┌────────────┐  │                 │  ┌────┐ ┌────┐  │
+│  │  Scheduler │  │                 │  │ W0 │ │ W1 │  │
+│  │  + Driver  │  │                 │  └────┘ └────┘  │
+│  │  (same     │  │                 │  ┌────┐ ┌────┐  │
+│  │   thread)  │  │                 │  │ W2 │ │ W3 │  │
+│  └────────────┘  │                 │  └────┘ └────┘  │
+│                  │                 │                  │
+│  Pros:           │                 │  Pros:           │
+│  - No Send req   │                 │  - Uses all CPUs │
+│  - No sync cost  │                 │  - Work stealing │
+│  - Deterministic │                 │  - Production    │
+│                  │                 │                  │
+│  Cons:           │                 │  Cons:           │
+│  - One CPU core  │                 │  - Send required │
+│  - Can't use     │                 │  - More complex  │
+│    spawn()       │                 │  - Non-determ.   │
+│    (only         │                 │                  │
+│    spawn_local)  │                 │                  │
+└──────────────────┘                 └──────────────────┘
+```
+
+### When to use each
+
+- **`current_thread`**: tests, WASM, simple CLI tools, apps with `!Send` types
+- **`multi_thread`**: web servers, database proxies, anything with high concurrency
+
+## The Runtime Builder
 
 ```rust
+// Multi-threaded (default for #[tokio::main])
 let rt = tokio::runtime::Builder::new_multi_thread()
-    .worker_threads(4)
-    .enable_all()        // enables I/O + time drivers
+    .worker_threads(4)        // default: num_cpus
+    .max_blocking_threads(512) // for spawn_blocking
+    .enable_io()              // I/O driver (mio)
+    .enable_time()            // timer driver
+    .thread_name("my-worker")
+    .on_thread_start(|| println!("worker started"))
+    .build()?;
+
+// Single-threaded
+let rt = tokio::runtime::Builder::new_current_thread()
+    .enable_all()
     .build()?;
 ```
 
-### Driver stack
+### What enable_io() and enable_time() do
 
-The driver is layered: signal driver wraps time driver wraps I/O driver. Each `park()` call propagates down the stack, letting all drivers process events.
+```
+enable_io():   creates mio::Poll, starts I/O driver
+               without it: TcpStream, UdpSocket, etc. panic
 
-### Block-on entry point
+enable_time(): creates timer wheel, starts time driver
+               without it: tokio::time::sleep panics
 
-`Runtime::block_on()` parks the current thread on the driver, polling the provided future and processing driver events between polls.
+enable_all():  enables both I/O and time
+```
+
+## The Driver stack
+
+The driver is layered — each layer wraps the one below:
+
+```
+park() call flow:
+
+  SignalDriver::park()
+    │
+    ├── check for pending signals
+    │
+    └── TimeDriver::park()
+          │
+          ├── compute timeout from next timer deadline
+          │
+          └── IoDriver::park(timeout)
+                │
+                └── mio::Poll::poll(timeout)
+                      │
+                      └── OS: kqueue / epoll (blocks)
+
+return flow:
+
+  mio returns events
+    │
+    └── IoDriver: wake I/O tasks
+          │
+          └── TimeDriver: fire expired timers, wake timer tasks
+                │
+                └── SignalDriver: dispatch signals
+```
+
+This is why `enable_io()` and `enable_time()` matter — without them, those driver layers don't exist.
+
+## Handle: spawning from anywhere
+
+```rust
+let rt = Runtime::new()?;
+let handle = rt.handle().clone();  // Handle is Send + Sync + Clone
+
+// From another thread:
+handle.spawn(async { /* runs on the runtime */ });
+
+// From inside async code:
+let handle = tokio::runtime::Handle::current();
+handle.spawn(async { /* also works */ });
+```
+
+## Tracing through tokio source
+
+A fun exercise: trace `tokio::spawn(my_future)` through the source code.
+
+```
+tokio::spawn(future)
+  → context::spawn(future)        // get the current runtime context
+  → scheduler.spawn(task)          // submit to the scheduler
+  → worker.schedule(task)          // push to local queue (or global)
+  → if worker idle: worker.unpark() // wake a sleeping worker
+```
 
 ## Exercises
 
-1. Build a `current_thread` runtime manually and run a simple TCP echo server on it
-2. Build a `multi_thread` runtime with 2 worker threads; print `std::thread::current().id()` from spawned tasks to observe thread distribution
-3. Create a runtime with only `enable_io()` (no time driver) and observe what happens when you call `tokio::time::sleep`
-4. Use `runtime::Handle::current()` to spawn work from outside the runtime
-5. Compare throughput of `current_thread` vs `multi_thread` for a simple echo server under load
+### Exercise 1: current_thread echo server
+
+Build a TCP echo server on `current_thread`. Use `spawn_local` for tasks. Verify it works but only uses one CPU core.
+
+### Exercise 2: multi_thread thread distribution
+
+Spawn 100 tasks on a `multi_thread` runtime with 4 workers. Each task records `std::thread::current().id()`. Print how many tasks ran on each thread — should be roughly balanced.
+
+### Exercise 3: Missing driver
+
+Create a runtime with only `enable_io()` (no time). Try `tokio::time::sleep(1s).await`. What error do you get?
+
+Then create with only `enable_time()` (no I/O). Try `TcpListener::bind`. What happens?
+
+### Exercise 4: Handle from another thread
+
+```rust
+let rt = Runtime::new()?;
+let handle = rt.handle().clone();
+
+std::thread::spawn(move || {
+    handle.spawn(async {
+        println!("running on tokio from a std thread!");
+    });
+});
+```
+
+### Exercise 5: Throughput comparison
+
+Build a simple echo server. Benchmark with `nc` or a load tester:
+- `current_thread` with 1000 concurrent connections
+- `multi_thread` (4 workers) with 1000 concurrent connections
+
+Measure requests/second. How much does multi_thread help?
