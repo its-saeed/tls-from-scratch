@@ -1,4 +1,4 @@
-# Lesson 25: Streams — Async Iteration, StreamExt, Backpressure
+# Lesson 26: Streams — Async Iteration, StreamExt, Backpressure
 
 ## What you'll learn
 

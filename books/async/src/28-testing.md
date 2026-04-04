@@ -1,4 +1,4 @@
-# Lesson 27: Testing Async Code — tokio::test, Time Mocking, Deterministic Testing
+# Lesson 28: Testing Async Code — tokio::test, Time Mocking, Deterministic Testing
 
 ## What you'll learn
 

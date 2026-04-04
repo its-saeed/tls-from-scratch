@@ -1,4 +1,4 @@
-# Lesson 23: Cancellation Safety — Dropped Futures, Data Loss, Safe Patterns
+# Lesson 24: Cancellation Safety — Dropped Futures, Data Loss, Safe Patterns
 
 ## What you'll learn
 

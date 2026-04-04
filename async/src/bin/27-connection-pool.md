@@ -1,4 +1,4 @@
-# Lesson 26: Connection Pooling — Reuse, Health Checks, Idle Timeout
+# Lesson 27: Connection Pooling — Reuse, Health Checks, Idle Timeout
 
 ## What you'll learn
 

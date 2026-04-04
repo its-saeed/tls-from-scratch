@@ -1,32 +1,75 @@
-# Lesson 22: Backpressure — Bounded Channels, Semaphore, Flow Control
+# Lesson 23: Backpressure -- Bounded Channels, Semaphore, poll_ready
 
-## What you'll learn
+> **Prerequisites**: Lessons 13 (channels), 18 (tokio::sync), 21 (graceful shutdown).
 
-- What backpressure is and why unbounded queues are dangerous
-- Using bounded channels to propagate backpressure
-- Semaphore-based flow control for non-channel patterns
-- Detecting and responding to overload
+## Real-life analogy: water pressure in pipes
 
-## Key concepts
+```
+UNBOUNDED (no backpressure):
 
-### The problem
+  Fire hydrant          Tiny garden hose
+  =============>>>>>>>>>=============>  BURST!
+  (fast producer)       (slow consumer)
 
-Without backpressure, a fast producer overwhelms a slow consumer. Memory grows unbounded, latency spikes, and eventually the system crashes (OOM).
+  The producer pushes water faster than the pipe can carry.
+  Pressure builds. The pipe bursts. Your system OOMs.
 
-### Bounded channels
+
+BOUNDED (with backpressure):
+
+  Fire hydrant      Pressure valve      Garden hose
+  =============>>>> |  BLOCKS  | >>>>=============>
+  (fast producer)   (capacity=100)     (slow consumer)
+
+  When the pipe is full, the valve closes.
+  The producer STOPS until the consumer drains some water.
+  Nobody bursts. The system stays alive.
+```
+
+## Architecture: bounded channel flow
+
+```
+          Producer                 Consumer
+            |                        |
+            v                        |
+   tx.send(item).await               |
+            |                        |
+   +--------v--------+              |
+   |  Bounded Buffer  |  capacity=4  |
+   | [X] [X] [X] [X] |  FULL!       |
+   +---------+--------+              |
+             |                       |
+   Producer SUSPENDS here    rx.recv().await
+   until consumer takes one          |
+             |                       v
+   +--------v--------+       processes item
+   | [X] [X] [X] [_] |  one slot free
+   +---------+--------+
+             |
+   Producer WAKES UP, sends next item
+```
+
+## Bounded channels
 
 ```rust
 let (tx, rx) = tokio::sync::mpsc::channel(100); // buffer of 100
 
 // Producer blocks (awaits) when buffer is full
 tx.send(item).await?;
+
+// try_send for non-blocking "drop if full" strategy
+match tx.try_send(item) {
+    Ok(()) => { /* sent */ }
+    Err(TrySendError::Full(item)) => { /* channel full, drop or retry */ }
+    Err(TrySendError::Closed(item)) => { /* receiver gone */ }
+}
 ```
 
 The `send().await` suspends when the buffer is full, naturally slowing the producer.
 
-### Semaphore-based flow control
+## Semaphore-based flow control
 
-When you don't use channels (e.g., spawned tasks):
+When you do not use channels (e.g., spawned tasks hitting an API):
 
 ```rust
 let sem = Arc::new(Semaphore::new(100));
@@ -39,23 +82,33 @@ loop {
 }
 ```
 
-### Strategies for overload
+## Strategies for overload
 
-| Strategy | Behavior |
-|----------|----------|
-| Block (await) | Producer waits — backpressure |
-| Drop newest | `try_send` fails, drop the item |
-| Drop oldest | Evict from buffer head |
-| Return error | HTTP 503, GRPC RESOURCE_EXHAUSTED |
+| Strategy       | Mechanism             | When to use                    |
+|----------------|-----------------------|--------------------------------|
+| Block (await)  | `send().await`        | Default -- propagate pressure  |
+| Drop newest    | `try_send` + discard  | Metrics, telemetry             |
+| Drop oldest    | `VecDeque` pop front  | Real-time video frames         |
+| Return error   | HTTP 503              | Load shedding at the edge      |
 
-### TCP flow control as analogy
+## TCP analogy
 
-TCP's receive window is backpressure at the OS level. Tokio's bounded channels are the application-level equivalent.
+TCP's receive window is backpressure at the OS level. When the receiver's buffer fills, the sender's `write()` blocks. Tokio's bounded channels are the application-level equivalent.
 
 ## Exercises
 
-1. Create a producer that generates items 10x faster than the consumer; compare bounded vs unbounded channel memory usage
-2. Implement a "drop oldest" policy using a `VecDeque` behind a `Mutex`
-3. Build a web server that returns 503 when a `Semaphore` is exhausted
-4. Chain two bounded channels (producer -> transformer -> consumer) and observe backpressure propagation
-5. Measure latency distribution with and without backpressure under overload
+### Exercise 1: Bounded vs unbounded memory
+
+Create a producer that generates items 10x faster than the consumer. Compare memory usage between a bounded channel (capacity 10) and an unbounded channel after 100,000 items.
+
+### Exercise 2: Semaphore rate limiter
+
+Build a rate limiter using `Semaphore` that allows at most 5 concurrent HTTP-style requests. Log when a request waits for a permit vs gets one immediately.
+
+### Exercise 3: Drop-oldest policy
+
+Implement a "drop oldest" buffer using `VecDeque` behind a `Mutex`. When the buffer is full, pop the front before pushing to the back.
+
+### Exercise 4: Chained backpressure
+
+Chain two bounded channels: producer -> transformer -> consumer. Slow down the consumer and observe backpressure propagating all the way to the producer.
