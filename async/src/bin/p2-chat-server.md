@@ -1,8 +1,63 @@
 # Project 2: Multi-threaded Chat Server
 
+> **Prerequisites**: Lessons 9-15 (reactor, scheduling, async I/O, timers, channels, work-stealing, select). This project combines them all.
+
+## Overview
+
 Build a fully working chat server on top of the async runtime you built in
-Lessons 8-14. No tokio, no async-std -- just your reactor, executor, channels,
+Lessons 9-15. No tokio, no async-std — just your reactor, executor, channels,
 and timers. This project proves your runtime can handle real concurrent I/O.
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  Chat Server (your runtime)                              │
+│                                                          │
+│  ┌────────────────────────────────────────────────────┐  │
+│  │  Accept Loop (one task)                            │  │
+│  │    TcpListener.accept() → spawn client task        │  │
+│  └──────┬─────────────────────────────────────────────┘  │
+│         │ spawn                                          │
+│         ▼                                                │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  │
+│  │ Client A     │  │ Client B     │  │ Client C     │  │
+│  │              │  │              │  │              │  │
+│  │ read loop:   │  │ read loop:   │  │ read loop:   │  │
+│  │  select! {   │  │  select! {   │  │  select! {   │  │
+│  │   stream.read│  │   stream.read│  │   stream.read│  │
+│  │   inbox.recv │  │   inbox.recv │  │   inbox.recv │  │
+│  │  }           │  │  }           │  │  }           │  │
+│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘  │
+│         │                 │                  │           │
+│         └────────┬────────┴────────┬─────────┘           │
+│                  │                 │                      │
+│           ┌──────▼─────────────────▼──────┐              │
+│           │  Broker Task                  │              │
+│           │  (owns the client map)        │              │
+│           │                               │              │
+│           │  events channel:              │              │
+│           │    Join(id, nick, inbox_tx)   │              │
+│           │    Leave(id)                  │              │
+│           │    Message(id, text)          │              │
+│           │                               │              │
+│           │  On Message: fan out to all   │              │
+│           │  client inboxes except sender │              │
+│           └───────────────────────────────┘              │
+└──────────────────────────────────────────────────────────┘
+```
+
+### Why a broker?
+
+Instead of sharing a `HashMap<ClientId, Sender>` behind a Mutex (which every client would lock), we use a **broker task** that owns the state exclusively. Clients communicate with the broker through a channel.
+
+```
+Without broker:                       With broker:
+  Client A locks HashMap              Client A sends Event to broker
+  Client B waits for lock             Client B sends Event to broker
+  Client C waits for lock             Broker processes events sequentially
+  → lock contention                   → no contention, no Mutex
+```
 
 ## What you'll build
 
