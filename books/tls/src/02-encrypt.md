@@ -1,89 +1,242 @@
 # Lesson 2: Symmetric Encryption (ChaCha20-Poly1305)
 
-## The idea
+## Real-life analogy: the lockbox with a shared key
 
-You have one secret key. The same key encrypts and decrypts. Both sides must know the key beforehand.
+Alice and Bob each have a copy of the same key for a lockbox:
 
 ```
-plaintext + key → ciphertext
-ciphertext + key → plaintext
+Alice's side:                        Bob's side:
+  ┌──────────────────┐               ┌──────────────────┐
+  │ "meet at 3pm"    │               │                  │
+  │    + key 🔑      │               │  ciphertext      │
+  │    → lock 🔒     │──── send ────►│    + key 🔑      │
+  │    → ciphertext  │               │    → unlock 🔓   │
+  └──────────────────┘               │    → "meet at 3pm│
+                                     └──────────────────┘
+
+Eve intercepts:
+  "x7#kQ!9pL@" ← meaningless without the key
 ```
 
-This is what TLS uses for all bulk data after the handshake. It's fast — gigabytes per second on modern hardware.
+**Symmetric** = same key locks and unlocks. Fast. Simple. The question is: how do Alice and Bob get the same key? (That's Lesson 4.)
+
+## What symmetric encryption does
+
+```
+encrypt(key, nonce, plaintext) → ciphertext
+decrypt(key, nonce, ciphertext) → plaintext
+
+Key:        32 bytes (256 bits) — the shared secret
+Nonce:      12 bytes — unique per message (explained below)
+Plaintext:  your data (any size)
+Ciphertext: same size as plaintext + 16 bytes (auth tag)
+```
+
+This is what TLS uses for **all** bulk data after the handshake. Fast — gigabytes per second.
+
+## Try it yourself
+
+```sh
+# Encrypt a file with OpenSSL using ChaCha20:
+echo "secret message" > plain.txt
+openssl enc -chacha20 -in plain.txt -out encrypted.bin \
+  -K $(openssl rand -hex 32) -iv $(openssl rand -hex 16)
+
+# The encrypted file is unreadable:
+xxd encrypted.bin | head -3
+
+# See AES hardware acceleration on your CPU:
+# macOS:
+sysctl -a | grep -i aes
+# hw.optional.aes: 1  ← your CPU has AES-NI
+
+# Linux:
+grep -o aes /proc/cpuinfo | head -1
+```
+
+## The old problem: encryption without authentication
+
+Old ciphers (AES-CBC) only gave you **confidentiality**:
+
+```
+Old encryption (AES-CBC):
+  plaintext: "transfer $100 to Bob"
+  encrypt → ciphertext: 0x7a3f8b2e1c...
+
+  Attacker can't READ it                    ✓
+  But attacker CAN flip bits:               ✗
+    0x7a3f8b2e1c... → 0x7a3f8b2e9c...
+    Decrypts to: "transfer $900 to Bob"
+
+  Nobody detects the tampering!
+  This is the "padding oracle" family of attacks.
+```
 
 ## AEAD: Authenticated Encryption with Associated Data
 
-Old encryption (like AES-CBC) only gave you **confidentiality** — an attacker couldn't read your data, but could silently **flip bits** in the ciphertext. You'd decrypt garbage without knowing it was tampered with. This led to real attacks (padding oracle, etc.).
+Modern encryption combines **encryption + integrity** in one operation:
 
-AEAD solves this by combining encryption + integrity in one operation:
-- **Ciphertext**: same length as plaintext (encrypted)
-- **Tag**: 16 bytes appended — a MAC that proves the ciphertext wasn't modified
-
-When decrypting, if even one bit of the ciphertext or tag was changed, decryption **fails with an error** instead of silently returning corrupted data.
+```
+┌──────────────────────────────────────────────────────┐
+│  AEAD Output                                         │
+│                                                      │
+│  ┌─────────────────────────┬──────────┐              │
+│  │  Ciphertext             │ Auth Tag │              │
+│  │  (same length as        │ (16 bytes│              │
+│  │   plaintext, encrypted) │  MAC)    │              │
+│  └─────────────────────────┴──────────┘              │
+│                                                      │
+│  On decrypt:                                         │
+│    1. Verify the tag — was anything modified?         │
+│    2. If tag invalid → ERROR (reject immediately)    │
+│    3. If tag valid → decrypt → return plaintext      │
+│                                                      │
+│  Attacker flips one bit of ciphertext?               │
+│    → Tag doesn't match → decryption FAILS            │
+│    → No corrupted data ever reaches your code        │
+└──────────────────────────────────────────────────────┘
+```
 
 ## ChaCha20-Poly1305
 
 TLS 1.3 supports exactly two AEAD ciphers:
-- **AES-256-GCM**: hardware-accelerated on most CPUs via AES-NI instructions
-- **ChaCha20-Poly1305**: faster in pure software (no special CPU instructions needed), designed by Daniel Bernstein
 
-ChaCha20 = the encryption part (stream cipher — generates a keystream XORed with plaintext)
-Poly1305 = the authentication part (computes a MAC over ciphertext)
+```
+                    AES-256-GCM          ChaCha20-Poly1305
+─────────────────────────────────────────────────────────────
+Encryption          AES (block cipher)   ChaCha20 (stream cipher)
+Authentication      GHASH                Poly1305
+Key / Nonce / Tag   256b / 96b / 128b   256b / 96b / 128b
+Hardware accel      AES-NI (Intel/AMD)   None needed
+Software speed      Slow without AES-NI  Fast everywhere
+Used by             Most servers          Mobile, IoT, WireGuard
+```
 
-## Nonces: the critical rule
+### How ChaCha20 works (simplified)
 
-Every encryption call takes a **nonce** (number used once) — 12 bytes. The absolute rule:
+ChaCha20 is a **stream cipher** — it generates a pseudorandom keystream XORed with plaintext:
 
-**Never reuse a nonce with the same key.**
+```
+ChaCha20(key, nonce, counter) → keystream
 
-If you encrypt two different messages with the same key and nonce, an attacker can XOR the two ciphertexts together — the keystreams cancel out, revealing the XOR of the two plaintexts. From there, frequency analysis recovers both messages.
+plaintext:  "hello world!"
+keystream:  0x7a3f8b2e1c...   (deterministic from key+nonce)
+ciphertext: plaintext XOR keystream
 
-In TLS, the nonce is simply a counter (0, 1, 2, ...) — trivial to guarantee uniqueness.
+To decrypt: ciphertext XOR keystream = plaintext
+            (XOR undoes itself)
+```
 
-## Real-world scenarios
+### How Poly1305 works (simplified)
 
-### Alice and Bob's encrypted chat
+Poly1305 computes a 16-byte **tag** over the ciphertext:
 
-Alice and Bob pre-share a 256-bit key (how they share it is Lesson 4's problem).
+```
+Poly1305(key, ciphertext) → tag (16 bytes)
 
-1. Alice wants to send "meet at 3pm"
-2. Alice encrypts with key + nonce=0: `encrypt(key, 0, "meet at 3pm")` → ciphertext + tag
-3. Alice sends ciphertext + tag to Bob
-4. Bob decrypts with the same key + nonce=0 → "meet at 3pm"
+Change one bit of ciphertext → completely different tag.
+Receiver recomputes tag and compares — mismatch = tamper detected.
+```
 
-Eve intercepts the ciphertext. She sees random-looking bytes. She flips a byte hoping to change "3pm" to "5pm". Bob tries to decrypt — the tag check fails. Bob knows the message was tampered with.
+## Nonces: the most dangerous footgun
 
-### The nonce disaster: reuse in practice
+Every encryption call takes a **nonce** (number used once) — 12 bytes.
 
-In 2016, researchers found that a popular TLS implementation reused nonces when session tickets were used across multiple servers. This allowed attackers to recover plaintext from recorded sessions. A simple counter bug broke the entire encryption.
+**The absolute rule: never reuse a nonce with the same key.**
 
-### Why two different ciphers in TLS?
+### Why nonce reuse is catastrophic
 
-AES-GCM is faster on CPUs with AES-NI (Intel, AMD, modern ARM). But on devices without hardware AES support (older phones, IoT), AES-GCM is slow. ChaCha20-Poly1305 is consistently fast everywhere because it only uses basic operations (add, rotate, XOR). Google originally pushed for ChaCha20-Poly1305 in TLS specifically for Android devices.
+Same key + same nonce → same keystream:
+
+```
+Message 1: "hello world!" XOR keystream = ciphertext_1
+Message 2: "secret msg!!" XOR keystream = ciphertext_2
+                               ↑ SAME keystream!
+
+Attacker computes:
+  ciphertext_1 XOR ciphertext_2
+  = plaintext_1 XOR plaintext_2       ← keystreams cancel out!
+
+From plaintext XOR, frequency analysis recovers both messages.
+```
+
+```sh
+# Demonstrate XOR cancellation:
+python3 -c "
+a = b'hello world!'
+b = b'secret msg!!'
+xor = bytes(x ^ y for x, y in zip(a, b))
+print(f'plaintext XOR: {xor.hex()}')
+print('This is what the attacker gets from nonce reuse.')
+"
+```
+
+### How TLS avoids nonce reuse
+
+TLS uses a **counter**: message 0 → nonce 0, message 1 → nonce 1, etc. Simple, bulletproof.
+
+### Real-world nonce disasters
+
+- **2016 TLS**: nonce reuse across servers when session tickets were shared. Plaintext recovered.
+- **PS3 (2010)**: Sony used the same nonce for every ECDSA signature. Private key recovered.
+- **WPA2 KRACK (2017)**: Wi-Fi nonce reuse allowed decryption of packets.
+
+## Associated Data: authenticated but not encrypted
+
+AEAD can authenticate **plaintext metadata** alongside encrypted data:
+
+```
+┌──────────────────────────────────────────────────┐
+│  Associated data (plaintext, tamper-proof):       │
+│    "message-id: 42, type: chat"                  │
+│                                                  │
+│  Encrypted payload:                              │
+│    "meet at 3pm" → 0x7a3f8b...                  │
+│                                                  │
+│  Auth tag covers BOTH:                           │
+│    Modify the header? Tag fails.                 │
+│    Modify the ciphertext? Tag fails.             │
+└──────────────────────────────────────────────────┘
+```
+
+TLS uses this for record headers — the header is plaintext but authenticated.
+
+## Benchmark on your machine
+
+```sh
+# Compare AES-GCM vs ChaCha20 on your hardware:
+openssl speed -evp chacha20-poly1305
+openssl speed -evp aes-256-gcm
+# AES-GCM is usually faster with AES-NI hardware
+# ChaCha20 wins on devices without AES-NI
+```
 
 ## Exercises
 
-### Exercise 1: Encrypt, decrypt, tamper (implemented in 2-encrypt.rs)
-Encrypt a message, decrypt it, then flip one byte and show decryption fails.
+### Exercise 1: Encrypt, decrypt, tamper
 
-### Exercise 2: Nonce reuse attack (try it yourself)
-Encrypt two different messages with the SAME key and SAME nonce. XOR the two ciphertexts together. Compare with XORing the two plaintexts together. They should be identical — demonstrating why nonce reuse is catastrophic.
+Encrypt a message with ChaCha20-Poly1305. Decrypt it. Flip one byte of ciphertext, try to decrypt — show the error.
+
+### Exercise 2: Nonce reuse attack
+
+Encrypt two messages with the **same** key and nonce. XOR the ciphertexts (skip the tag). Compare with XORing the plaintexts — they match. This proves nonce reuse leaks `plain1 XOR plain2`.
+
+### Exercise 3: Counter nonce
+
+Encrypt 10 messages with counter nonces (0, 1, 2, ...). Decrypt each. Try decrypting message 5 with nonce 3 — should fail.
 
 ```rust
-let c1 = cipher.encrypt(nonce, b"hello world!".as_ref()).unwrap();
-let c2 = cipher.encrypt(nonce, b"secret msg!!".as_ref()).unwrap();
-// XOR c1 and c2 (skip the 16-byte tag at the end)
-// Compare with XOR of "hello world!" and "secret msg!!"
+fn counter_nonce(n: u64) -> [u8; 12] {
+    let mut nonce = [0u8; 12];
+    nonce[4..12].copy_from_slice(&n.to_be_bytes());
+    nonce
+}
 ```
-
-### Exercise 3: Large file encryption
-Encrypt a 1MB file in chunks. Use a counter nonce: chunk 0 gets nonce=0, chunk 1 gets nonce=1, etc. Decrypt all chunks and verify the output matches the original file. This is how TLS encrypts a stream of data — one record at a time, each with an incrementing nonce.
 
 ### Exercise 4: Associated data
-AEAD supports "associated data" — unencrypted metadata that's still authenticated. Try encrypting with AAD:
-```rust
-use chacha20poly1305::aead::Payload;
-let payload = Payload { msg: b"secret body", aad: b"message-id: 42" };
-cipher.encrypt(nonce, payload)
-```
-The AAD isn't encrypted (it's sent in plaintext alongside the ciphertext), but if anyone modifies it, decryption fails. TLS uses this for record headers — the header is plaintext but authenticated.
+
+Encrypt with AAD. Decrypt with correct AAD — works. Decrypt with modified AAD — fails. The metadata is plaintext but tamper-proof.
+
+### Exercise 5: Large file encryption
+
+Encrypt a 1MB file in 4KB chunks. Each chunk uses nonce = chunk index. Decrypt all chunks, reassemble, verify SHA-256 matches the original. This is how TLS encrypts a data stream.
