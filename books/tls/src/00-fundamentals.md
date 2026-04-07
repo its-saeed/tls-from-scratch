@@ -2,6 +2,34 @@
 
 Before writing any code, you need to understand the vocabulary and core concepts. Every lesson that follows builds on these ideas.
 
+## Real-life analogy: sending a secret letter
+
+Imagine you need to send a secret letter across town. Every cryptographic concept maps to a part of this scenario:
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│  The Secret Letter Problem                                   │
+│                                                              │
+│  You (Alice) want to send a letter to Bob.                   │
+│  The mail carrier (the network) might read it.               │
+│                                                              │
+│  Confidentiality → put the letter in a locked box            │
+│  Integrity       → seal the box with tamper-evident tape     │
+│  Authentication  → stamp it with your wax seal               │
+│                                                              │
+│  Key             → the key to the locked box                 │
+│  Hash            → a fingerprint of the letter               │
+│  Signature       → your wax seal (only you have the ring)    │
+│  Nonce           → a unique serial number on each box        │
+│  Certificate     → a passport proving you are Alice          │
+│                                                              │
+│  Without these:                                              │
+│    Anyone can read the letter (no confidentiality)           │
+│    Anyone can change the letter (no integrity)               │
+│    Anyone can pretend to be you (no authentication)          │
+└──────────────────────────────────────────────────────────────┘
+```
+
 ## The three goals of cryptography
 
 ### 1. Confidentiality
@@ -206,27 +234,114 @@ Cryptography literature uses standard names:
 
 ## Common attacks
 
+```
+Attack              Who         What they do             Defense
+─────────────────────────────────────────────────────────────────────
+Eavesdropping       Eve         Listens to traffic       Encryption
+Man-in-the-middle   Mallory     Intercepts + modifies    Authentication
+Replay              Mallory     Re-sends old messages    Nonces / sequence #
+Tampering           Mallory     Modifies ciphertext      AEAD / MAC
+Downgrade           Mallory     Forces weak crypto       Signed handshake
+```
+
 ### Eavesdropping (passive)
 Eve listens to network traffic. Defeated by encryption (confidentiality).
+
+```sh
+# See how easy eavesdropping is on unencrypted traffic:
+# Terminal 1: start a plaintext HTTP server
+python3 -m http.server 8000 &
+
+# Terminal 2: capture traffic
+sudo tcpdump -i lo0 port 8000 -A 2>/dev/null &
+
+# Terminal 3: make a request
+curl http://127.0.0.1:8000/
+
+# tcpdump shows EVERYTHING in plaintext — the full HTTP request and response.
+# This is why HTTPS exists.
+kill %1 %2 2>/dev/null
+```
 
 ### Man-in-the-middle / MITM (active)
 Mallory sits between Alice and Bob, impersonating each to the other. Defeated by authentication.
 
 ```
-Alice ←→ Mallory ←→ Bob
-Alice thinks she's talking to Bob.
-Bob thinks he's talking to Alice.
+Alice ←──────→ Mallory ←──────→ Bob
+  "Hi Bob"   →  reads it  →  "Hi Bob"
+  "Hi Alice" ←  reads it  ←  "Hi Alice"
+
+Both think they're talking to each other.
 Mallory reads and modifies everything.
 ```
 
 ### Replay attack
 Mallory records a valid encrypted message and sends it again later. Defeated by sequence numbers or timestamps.
 
+```
+Alice sends:  "transfer $100" (encrypted, valid)
+Mallory records it.
+... 1 hour later ...
+Mallory sends the same bytes again.
+Server processes it → $100 transferred AGAIN.
+```
+
 ### Tampering
 Mallory modifies an encrypted message in transit. Defeated by integrity checks (AEAD, MAC).
 
 ### Downgrade attack
 Mallory forces Alice and Bob to use weaker crypto than they'd normally choose. Defeated by signing the handshake negotiation.
+
+## See it in the real world
+
+Every concept in this lesson is happening right now on your machine:
+
+```sh
+# See a real TLS handshake — every concept in action:
+echo | openssl s_client -connect google.com:443 2>/dev/null | head -20
+# You'll see: certificate chain (authentication), cipher suite (encryption),
+# protocol version, key exchange algorithm
+
+# See WHICH cipher suite was negotiated:
+echo | openssl s_client -connect google.com:443 2>/dev/null | grep "Cipher"
+# Example: TLS_AES_256_GCM_SHA384
+# That's: AEAD cipher (AES-GCM) + hash (SHA384)
+
+# See the certificate (authentication):
+echo | openssl s_client -connect google.com:443 2>/dev/null | \
+  openssl x509 -noout -subject -issuer
+# subject: CN = *.google.com  ← who they claim to be
+# issuer: CN = GTS CA 1C3     ← who vouches for them (CA)
+
+# See forward secrecy in action:
+echo | openssl s_client -connect google.com:443 2>/dev/null | grep "Server Temp Key"
+# Server Temp Key: X25519  ← ephemeral DH key exchange = forward secrecy
+```
+
+```sh
+# See encryption protecting YOUR traffic right now:
+# Capture some HTTPS traffic:
+sudo tcpdump -i en0 -c 10 host google.com and port 443 -w /tmp/tls.pcap 2>/dev/null &
+curl -s https://google.com > /dev/null
+sleep 2 && kill %1 2>/dev/null
+
+# Look at the raw bytes — all encrypted:
+tcpdump -r /tmp/tls.pcap -X 2>/dev/null | tail -20
+# You see hex garbage — that's AEAD encryption at work.
+# Without the key, nobody can read it. Not your ISP, not the Wi-Fi owner.
+```
+
+```sh
+# See HMAC (integrity) — on your own machine:
+# Your SSH known_hosts uses HMAC to hash hostnames:
+cat ~/.ssh/known_hosts | head -3
+# Some lines start with |1|... — that's HMAC-hashed hostnames
+
+# Package managers verify integrity with hashes:
+# macOS:
+shasum -a 256 $(which ls)
+# The OS verified this hash when the binary was installed
+```
 
 ## How TLS uses all of this
 
@@ -242,6 +357,24 @@ TLS Handshake:
 TLS Record Protocol:
   7. AEAD encryption of data         (confidentiality + integrity)
   8. Sequence number nonces           (replay defense)
+```
+
+```
+Every concept → a lesson:
+
+  Concept              Lesson    What you'll build
+  ──────────────────────────────────────────────────
+  Hash                 1         SHA-256 file hasher
+  Symmetric encryption 2         ChaCha20-Poly1305
+  Signatures           3         Ed25519 sign/verify
+  Key exchange         4         X25519 Diffie-Hellman
+  Key derivation       5         HKDF from shared secret
+  Password KDFs        6         Argon2 / PBKDF2
+  Certificates         7         X.509 parsing
+  Cert generation      8         Build a CA with rcgen
+  Mini-TLS             9-12      Encrypted echo server
+  TLS handshake        13        Protocol deep dive
+  Real TLS             14-15     tokio-rustls + HTTPS
 ```
 
 Every concept in this lesson maps to a specific part of TLS. The following lessons implement each piece in Rust.
