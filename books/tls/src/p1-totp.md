@@ -209,16 +209,124 @@ Most services use SHA-1 + 6 digits + 30 seconds.
 
 ## Implementation guide
 
-### Dependencies
+We'll build this step by step. At each step, you can compile and test before moving on.
+
+### Step 0: Project setup
+
+Create the binary and add dependencies:
+
+```sh
+# If adding to the tls crate, create the file:
+touch tls/src/bin/p1-totp.rs
+```
+
+Add to `tls/Cargo.toml`:
 
 ```toml
 [dependencies]
 hmac = "0.12"
 sha1 = "0.10"
 data-encoding = "2"  # for base32 decoding
+clap = { version = "4", features = ["derive"] }
 ```
 
-### The core function
+Start with a skeleton:
+
+```rust
+use clap::{Parser, Subcommand};
+
+#[derive(Parser)]
+struct Cli {
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Generate a TOTP code
+    Generate { secret: String },
+}
+
+fn main() {
+    let cli = Cli::parse();
+    match cli.command {
+        Command::Generate { secret } => {
+            println!("TODO: generate TOTP for {}", secret);
+        }
+    }
+}
+```
+
+```sh
+cargo run -p tls --bin p1-totp -- generate JBSWY3DPEHPK3PXP
+# Should print the TODO message
+```
+
+### Step 1: Decode the base32 secret
+
+The shared secret comes as a base32 string. Decode it to raw bytes:
+
+```rust
+fn decode_secret(secret_base32: &str) -> Vec<u8> {
+    data_encoding::BASE32
+        .decode(secret_base32.as_bytes())
+        .expect("invalid base32 secret")
+}
+```
+
+Test it:
+
+```rust
+fn main() {
+    let secret = decode_secret("JBSWY3DPEHPK3PXP");
+    println!("Secret bytes: {:?}", secret);
+    println!("Length: {} bytes", secret.len());
+    // Should be 10 bytes: [72, 101, 108, 108, 111, 33, 222, 173, 190, 175]
+}
+```
+
+```sh
+# Verify with Python:
+python3 -c "import base64; print(list(base64.b32decode('JBSWY3DPEHPK3PXP')))"
+# [72, 101, 108, 108, 111, 33, 222, 173, 190, 175]
+```
+
+### Step 2: Compute the time step
+
+Get the current Unix timestamp and divide by 30:
+
+```rust
+fn current_time_step() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() / 30
+}
+```
+
+Test it:
+
+```rust
+fn main() {
+    let step = current_time_step();
+    let remaining = 30 - (std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() % 30);
+    println!("Time step: {}", step);
+    println!("Next code in: {}s", remaining);
+}
+```
+
+```sh
+# Compare with Python:
+python3 -c "import time; print(int(time.time()) // 30)"
+# Should match your Rust output
+```
+
+### Step 3: HMAC-SHA1
+
+Compute the HMAC using the secret and time step (as big-endian u64):
 
 ```rust
 use hmac::{Hmac, Mac};
@@ -226,50 +334,133 @@ use sha1::Sha1;
 
 type HmacSha1 = Hmac<Sha1>;
 
-fn generate_totp(secret_base32: &str, time_step: u64) -> u32 {
-    // 1. Decode base32 secret
-    let secret = data_encoding::BASE32
-        .decode(secret_base32.as_bytes()).unwrap();
-
-    // 2. HMAC-SHA1(secret, time_step as big-endian u64)
-    let mut mac = HmacSha1::new_from_slice(&secret).unwrap();
-    mac.update(&time_step.to_be_bytes());
+fn hmac_sha1(secret: &[u8], time_step: u64) -> [u8; 20] {
+    let mut mac = HmacSha1::new_from_slice(secret)
+        .expect("HMAC accepts any key length");
+    mac.update(&time_step.to_be_bytes());  // 8 bytes, big-endian
     let result = mac.finalize().into_bytes();
 
-    // 3. Dynamic truncation
-    let offset = (result[19] & 0x0F) as usize;
-    let code = u32::from_be_bytes([
-        result[offset] & 0x7F,
-        result[offset + 1],
-        result[offset + 2],
-        result[offset + 3],
-    ]);
-
-    // 4. Modulo for 6 digits
-    code % 1_000_000
-}
-
-fn totp_now(secret_base32: &str) -> u32 {
-    let time_step = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs() / 30;
-    generate_totp(secret_base32, time_step)
+    let mut output = [0u8; 20];
+    output.copy_from_slice(&result);
+    output
 }
 ```
 
-### Validation with clock skew tolerance
+Test it:
 
-Accept the current code + the previous one (±1 window):
+```rust
+fn main() {
+    let secret = decode_secret("JBSWY3DPEHPK3PXP");
+    let step = current_time_step();
+    let hmac = hmac_sha1(&secret, step);
+    println!("HMAC: {}", hex::encode(hmac));  // add `hex` dep, or use {:02x} formatting
+    println!("Length: {} bytes (always 20 for SHA-1)", hmac.len());
+}
+```
+
+Why big-endian? The RFC specifies it. If you use little-endian, your codes won't match any other TOTP implementation.
+
+### Step 4: Dynamic truncation
+
+This is the clever part — extract a 4-byte chunk from the HMAC at a position determined by the last byte:
+
+```rust
+fn truncate(hmac_result: &[u8; 20]) -> u32 {
+    // The last nibble (4 bits) determines the offset
+    let offset = (hmac_result[19] & 0x0F) as usize;
+    // offset is 0-15, and we read 4 bytes, so max index is 15+3=18 (within 20)
+
+    // Extract 4 bytes at that offset, mask the high bit
+    u32::from_be_bytes([
+        hmac_result[offset] & 0x7F,  // & 0x7F clears the sign bit
+        hmac_result[offset + 1],
+        hmac_result[offset + 2],
+        hmac_result[offset + 3],
+    ])
+}
+```
+
+Test it:
+
+```rust
+fn main() {
+    let secret = decode_secret("JBSWY3DPEHPK3PXP");
+    let step = current_time_step();
+    let hmac = hmac_sha1(&secret, step);
+
+    let offset = (hmac[19] & 0x0F) as usize;
+    println!("Last byte: 0x{:02x}", hmac[19]);
+    println!("Offset: {} (last nibble)", offset);
+
+    let truncated = truncate(&hmac);
+    println!("Truncated: {} (31-bit integer)", truncated);
+}
+```
+
+Why `& 0x7F`? To ensure the result is positive (clear the sign bit). The RFC requires a 31-bit unsigned value.
+
+### Step 5: Modulo → 6-digit code
+
+```rust
+fn generate_totp(secret_base32: &str, time_step: u64) -> u32 {
+    let secret = decode_secret(secret_base32);
+    let hmac = hmac_sha1(&secret, time_step);
+    let truncated = truncate(&hmac);
+    truncated % 1_000_000  // 6 digits
+}
+```
+
+Test it against the reference:
+
+```rust
+fn main() {
+    let code = generate_totp("JBSWY3DPEHPK3PXP", current_time_step());
+    println!("Code: {:06}", code);  // zero-pad to 6 digits
+}
+```
+
+```sh
+# Compare:
+cargo run -p tls --bin p1-totp -- generate JBSWY3DPEHPK3PXP
+oathtool --totp -b "JBSWY3DPEHPK3PXP"
+# MUST be identical!
+```
+
+If they don't match, check:
+1. Is the base32 decoding correct? (Step 1)
+2. Is the time step the same? (Step 2 — clocks might differ by a second across the boundary)
+3. Is the HMAC input big-endian? (Step 3)
+
+### Step 6: Wrap it in a nice CLI
+
+```rust
+fn totp_now(secret_base32: &str) -> u32 {
+    generate_totp(secret_base32, current_time_step())
+}
+
+fn main() {
+    let cli = Cli::parse();
+    match cli.command {
+        Command::Generate { secret } => {
+            let code = totp_now(&secret);
+            let remaining = 30 - (std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs() % 30);
+            println!("{:06}  (expires in {}s)", code, remaining);
+        }
+    }
+}
+```
+
+### Step 7: Validation
+
+Accept current window + previous (for clock skew):
 
 ```rust
 fn verify_totp(secret: &str, code: u32) -> bool {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-    let current_step = now / 30;
-
+    let current_step = current_time_step();
+    // Check current and previous window
     for step in [current_step, current_step - 1] {
         if generate_totp(secret, step) == code {
             return true;
@@ -278,6 +469,37 @@ fn verify_totp(secret: &str, code: u32) -> bool {
     false
 }
 ```
+
+Add to CLI:
+
+```rust
+Command::Verify { secret, code } => {
+    if verify_totp(&secret, code) {
+        println!("Valid!");
+    } else {
+        println!("Invalid!");
+    }
+}
+```
+
+Test:
+
+```sh
+# Get current code:
+CODE=$(oathtool --totp -b "JBSWY3DPEHPK3PXP")
+echo "Code: $CODE"
+
+# Verify immediately:
+cargo run -p tls --bin p1-totp -- verify JBSWY3DPEHPK3PXP $CODE
+# Valid!
+
+# Wait 60 seconds (two windows), verify again:
+sleep 60
+cargo run -p tls --bin p1-totp -- verify JBSWY3DPEHPK3PXP $CODE
+# Invalid! (code has expired beyond the ±1 window)
+```
+
+You now have a working TOTP authenticator. The exercises below extend it further.
 
 ## Exercises
 
