@@ -46,3 +46,14 @@
 - [Connection Pooling](./27-connection-pool.md)
 - [Testing Async Code](./28-testing.md)
 - [Project 4: Async Job Queue](./p4-job-queue.md)
+
+# Course 5: Architecture Patterns
+
+- [Task-per-Connection](./29-task-per-connection.md)
+- [Actor Model](./30-actor-model.md)
+- [Pipeline / Stream Processing](./31-pipeline.md)
+- [Fan-out / Fan-in](./32-fan-out-fan-in.md)
+- [Supervisor Tree](./33-supervisor.md)
+- [Event Bus / Pub-Sub](./34-event-bus.md)
+- [Choosing a Pattern](./35-choosing.md)
+- [Capstone: Distributed Task Queue](./p5-task-queue.md)
