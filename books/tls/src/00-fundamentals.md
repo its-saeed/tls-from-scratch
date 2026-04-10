@@ -150,15 +150,48 @@ If the message changes, verification fails. If someone else tries to sign, they 
 
 ### MAC (Message Authentication Code)
 
-Like a digital signature, but using a symmetric key. Both sides need the same secret key to create and verify the MAC.
+A MAC is a short piece of data (a **tag**) that proves two things about a message:
+1. **Integrity** — the message wasn't modified
+2. **Authenticity** — the message came from someone who knows the secret key
+
+Think of it as a tamper-evident seal that only works with a secret:
 
 ```
-tag = MAC(shared_key, message)
+Creating a MAC:
+  Alice has: message + shared_key
+  Alice computes: tag = MAC(shared_key, "transfer $100")
+  Alice sends: message + tag
+
+Verifying a MAC:
+  Bob has: message + tag + shared_key
+  Bob computes: expected_tag = MAC(shared_key, "transfer $100")
+  Bob checks: tag == expected_tag?
+    YES → message is authentic and unmodified
+    NO  → message was tampered with or wrong key
+
+Attacker (no key):
+  Eve intercepts: message + tag
+  Eve changes message to "transfer $900"
+  Eve can't compute new tag (doesn't have the key)
+  Bob checks → tag doesn't match → REJECTED
 ```
 
-Anyone with the shared key can verify the tag. Unlike a signature, a MAC doesn't prove *which* key holder created it (both sides have the same key).
+**MAC vs Hash**: a plain hash (Lesson 1) proves integrity but NOT authenticity — anyone can compute `SHA-256("transfer $900")` and replace the hash. A MAC requires the secret key, so only key holders can produce valid tags.
 
-**HMAC**: MAC built from a hash function (e.g., HMAC-SHA256). Used extensively in TLS.
+**MAC vs Signature**: a MAC uses a **symmetric** key (both sides share the same key). A signature uses an **asymmetric** key pair. MAC is faster but doesn't prove *which* key holder created it (both sides have the same key). Signatures prove exactly who signed.
+
+```
+           MAC                    Signature
+           ───                    ─────────
+Key:       shared symmetric key   asymmetric key pair
+Creates:   anyone with the key    only private key holder
+Verifies:  anyone with the key    anyone with the public key
+Proves:    "a key holder made it" "THIS person made it"
+Speed:     fast                   slower
+Used in:   TLS record integrity   TLS handshake authentication
+```
+
+**HMAC**: the most common MAC construction — built from a hash function (e.g., HMAC-SHA256). "Hash-based MAC." Used extensively in TLS for key derivation (HKDF, Lesson 5) and handshake integrity.
 
 ### AEAD (Authenticated Encryption with Associated Data)
 
