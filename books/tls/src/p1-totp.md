@@ -326,7 +326,42 @@ python3 -c "import time; print(int(time.time()) // 30)"
 
 ### Step 3: HMAC-SHA1
 
-Compute the HMAC using the secret and time step (as big-endian u64):
+**Why HMAC and not encryption?**
+
+You might wonder: why not just `encrypt(key, time_step)` and use the ciphertext as the code?
+
+```
+Option A: Encryption
+  encrypt(secret, time_step) → ciphertext
+  Problem: ciphertext is REVERSIBLE. If an attacker gets the ciphertext
+  AND the time_step (which is just the current time — public!), they
+  can try to recover the secret key through chosen-plaintext attacks.
+
+Option B: HMAC (what TOTP uses)
+  HMAC(secret, time_step) → tag
+  The tag is ONE-WAY. Even if you know the input (time_step) and the
+  output (tag), you CANNOT recover the secret key.
+  The attacker sees: time_step=57133333, code=847293
+  They still can't compute the secret.
+```
+
+The key differences:
+
+```
+                Encryption              HMAC
+────────────────────────────────────────────────
+Reversible?     Yes (decrypt)           No (one-way)
+Output size     Same as input           Fixed (20 bytes for SHA-1)
+Goal            Hide data               Prove knowledge of secret
+TOTP needs      Prove you have the key  ✓ (this is what we want)
+                without revealing it
+```
+
+TOTP doesn't need to hide the time step (it's just the current time — everyone knows it). It needs to prove "I know the secret" by producing a value that only someone with the secret could compute. That's exactly what HMAC does.
+
+Also practical: HMAC output is always 20 bytes regardless of input size, which makes the truncation step simple. Encryption output would vary in size and need padding.
+
+Now, compute the HMAC using the secret and time step (as big-endian u64):
 
 ```rust
 use hmac::{Hmac, Mac};
