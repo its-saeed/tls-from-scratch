@@ -499,9 +499,80 @@ cargo run -p tls --bin p2-sign -- verify-dir --pubkey my.key.pub ./release/
 
 Include the current timestamp in the signed data: `sign(key, timestamp_bytes || file_data)`. The signature covers both the time and the content.
 
-On verification, extract the timestamp and check:
-- Is the timestamp in the past? (not from the future)
-- Is it within 24 hours? (not too old)
+**The `.sig` file contains both the timestamp and the signature** — bundled together so they can't be tampered with independently:
+
+```
+┌──────────────────────────────────┐
+│  .sig file layout (72 bytes):   │
+│                                  │
+│  bytes 0-7:   timestamp          │  u64 big-endian, Unix seconds
+│  bytes 8-71:  Ed25519 signature  │  64 bytes
+│                                  │
+│  The signature covers:           │
+│    timestamp_bytes || file_bytes │
+│                                  │
+│  Why not a separate timestamp    │
+│  file? Because an attacker could │
+│  swap the timestamp while keeping│
+│  the signature — bundling them   │
+│  means both are protected.       │
+└──────────────────────────────────┘
+```
+
+Signing:
+
+```rust
+fn sign_with_timestamp(key: &SigningKey, file_data: &[u8]) -> Vec<u8> {
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+
+    // Sign: timestamp || file_data
+    let mut signed_data = Vec::new();
+    signed_data.extend_from_slice(&timestamp.to_be_bytes());
+    signed_data.extend_from_slice(file_data);
+    let signature = key.sign(&signed_data);
+
+    // .sig file: timestamp (8 bytes) + signature (64 bytes)
+    let mut sig_file = Vec::new();
+    sig_file.extend_from_slice(&timestamp.to_be_bytes());
+    sig_file.extend_from_slice(&signature.to_bytes());
+    sig_file  // 72 bytes total
+}
+```
+
+Verification:
+
+```rust
+fn verify_with_timestamp(pubkey: &VerifyingKey, file_data: &[u8],
+                          sig_file: &[u8], max_age_secs: u64) -> Result<(), String> {
+    // Extract timestamp + signature from .sig file
+    let timestamp = u64::from_be_bytes(sig_file[..8].try_into().unwrap());
+    let signature = Signature::from_bytes(&sig_file[8..72].try_into().unwrap());
+
+    // Reconstruct signed data
+    let mut signed_data = Vec::new();
+    signed_data.extend_from_slice(&timestamp.to_be_bytes());
+    signed_data.extend_from_slice(file_data);
+
+    // Verify signature
+    pubkey.verify_strict(&signed_data, &signature)
+        .map_err(|_| "signature invalid".to_string())?;
+
+    // Check timestamp
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    if timestamp > now { return Err("timestamp is in the future".into()); }
+    if now - timestamp > max_age_secs { return Err(format!("signature expired ({} seconds old)", now - timestamp)); }
+
+    Ok(())
+}
+```
+
+Test:
 
 ```sh
 cargo run -p tls --bin p2-sign -- sign --key my.key --timestamp doc.txt
@@ -510,6 +581,10 @@ cargo run -p tls --bin p2-sign -- sign --key my.key --timestamp doc.txt
 # Verify immediately:
 cargo run -p tls --bin p2-sign -- verify --pubkey my.key.pub --max-age 24h doc.txt doc.txt.sig
 # ✓ Signature valid (signed 2 minutes ago)
+
+# The .sig file is now 72 bytes (8 timestamp + 64 signature):
+wc -c doc.txt.sig
+# 72
 
 # Wait 25 hours...
 cargo run -p tls --bin p2-sign -- verify --pubkey my.key.pub --max-age 24h doc.txt doc.txt.sig
