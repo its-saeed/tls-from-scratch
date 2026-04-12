@@ -34,30 +34,30 @@ A CLI password manager. One file on disk, encrypted with your master password:
 
 ```sh
 # Create a new vault:
-cargo run -p tls --bin p4-vault -- init
+cargo run -p tls --bin p3-vault -- init
 # Enter master password: ********
 # Created vault.enc
 
 # Store a password:
-cargo run -p tls --bin p4-vault -- add github
+cargo run -p tls --bin p3-vault -- add github
 # Enter master password: ********
 # Username: alice
 # Password: s3cret!@#456
 # Saved.
 
 # Retrieve it later:
-cargo run -p tls --bin p4-vault -- get github
+cargo run -p tls --bin p3-vault -- get github
 # Enter master password: ********
 # Username: alice
 # Password: s3cret!@#456
 
 # List all entries:
-cargo run -p tls --bin p4-vault -- list
+cargo run -p tls --bin p3-vault -- list
 # Enter master password: ********
 # github, gmail, ssh-server
 
 # Wrong password:
-cargo run -p tls --bin p4-vault -- list
+cargo run -p tls --bin p3-vault -- list
 # Enter master password: wrong-password
 # Error: wrong password or corrupted vault
 ```
@@ -149,7 +149,7 @@ That's what we're building in Rust — but with Argon2 (stronger than PBKDF2) an
 ### Step 0: Project setup
 
 ```sh
-touch tls/src/bin/p4-vault.rs
+touch tls/src/bin/p3-vault.rs
 ```
 
 Dependencies (add to `tls/Cargo.toml`):
@@ -201,7 +201,7 @@ fn main() {
 ```
 
 ```sh
-cargo run -p tls --bin p4-vault -- --help
+cargo run -p tls --bin p3-vault -- --help
 ```
 
 ### Step 1: Read password from terminal (without echoing)
@@ -231,7 +231,7 @@ fn main() {
 ```
 
 ```sh
-cargo run -p tls --bin p4-vault -- init
+cargo run -p tls --bin p3-vault -- init
 # Master password: (you type, nothing appears)
 # You typed 12 characters (not shown)
 ```
@@ -322,7 +322,7 @@ fn load_vault(path: &str) -> ([u8; 16], [u8; 12], Vec<u8>) {
 Test the round-trip:
 
 ```sh
-cargo run -p tls --bin p4-vault -- init
+cargo run -p tls --bin p3-vault -- init
 # Master password: ********
 # Created vault.enc
 
@@ -425,36 +425,36 @@ fn main() {
 
 ```sh
 # Create vault:
-cargo run -p tls --bin p4-vault -- init
+cargo run -p tls --bin p3-vault -- init
 # Master password: test123
 # Confirm password: test123
 # Created vault.enc
 
 # Add entries:
-cargo run -p tls --bin p4-vault -- add github
+cargo run -p tls --bin p3-vault -- add github
 # Master password: test123
 # Username: alice
 # Password: gh-s3cret!
 
-cargo run -p tls --bin p4-vault -- add gmail
+cargo run -p tls --bin p3-vault -- add gmail
 # Master password: test123
 # Username: alice@gmail.com
 # Password: gm-p@ssw0rd
 
 # List:
-cargo run -p tls --bin p4-vault -- list
+cargo run -p tls --bin p3-vault -- list
 # Master password: test123
 # github
 # gmail
 
 # Get:
-cargo run -p tls --bin p4-vault -- get github
+cargo run -p tls --bin p3-vault -- get github
 # Master password: test123
 # Username: alice
 # Password: gh-s3cret!
 
 # Wrong password:
-cargo run -p tls --bin p4-vault -- list
+cargo run -p tls --bin p3-vault -- list
 # Master password: wrongpassword
 # Error: Wrong password or corrupted vault
 
@@ -492,11 +492,11 @@ Implement all the steps above. Test with the commands shown in Step 7.
 Add a `generate` command that creates random passwords:
 
 ```sh
-cargo run -p tls --bin p4-vault -- generate --length 20 --symbols
+cargo run -p tls --bin p3-vault -- generate --length 20 --symbols
 # Generated: k9$mP2@xL5#nQ8wR3&jY
 
 # Or generate and save in one step:
-cargo run -p tls --bin p4-vault -- add github --generate --length 16
+cargo run -p tls --bin p3-vault -- add github --generate --length 16
 # Master password: ********
 # Username: alice
 # Generated password: xK7mN2pQ9rW4tY6a
@@ -508,11 +508,11 @@ cargo run -p tls --bin p4-vault -- add github --generate --length 16
 Add export (decrypt → JSON file) and import (JSON file → encrypted vault):
 
 ```sh
-cargo run -p tls --bin p4-vault -- export --out backup.json
+cargo run -p tls --bin p3-vault -- export --out backup.json
 # Master password: ********
 # Exported 5 entries to backup.json (PLAINTEXT — delete after use!)
 
-cargo run -p tls --bin p4-vault -- import --in backup.json
+cargo run -p tls --bin p3-vault -- import --in backup.json
 # New master password: ********
 # Imported 5 entries.
 ```

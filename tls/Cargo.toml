@@ -20,3 +20,7 @@ data-encoding = "2"  # for base32 decoding
 image = "0.25"
 rqrr = "0.8"
 ed25519-dalek = { version = "2", features = ["rand_core"] }
+argon2 = "0.5"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rpassword = "7"  # for reading passwords without echoing to terminal
