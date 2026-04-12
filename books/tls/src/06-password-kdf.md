@@ -2,47 +2,151 @@
 
 > **Prerequisites**: Lesson 5 (HKDF). You understand key derivation — now learn why passwords need a different approach.
 
+## The core problem: passwords are terrible secrets
+
+In Lesson 5, we used HKDF to derive encryption keys from a DH shared secret. That shared secret was 32 random bytes — impossible to guess.
+
+But what if the secret is a **password**? Passwords are:
+
+```
+A random 256-bit key:
+  7f3a9b2c...  (32 bytes of pure randomness)
+  Possible values: 2^256 ≈ 10^77
+  Time to brute-force: longer than the universe exists
+
+A typical password:
+  "password123"
+  Possible values: maybe 10 billion common passwords
+  Time to brute-force with HKDF: seconds
+```
+
+**Feel the problem yourself** — run this:
+
+```sh
+python3 -c "
+import hashlib, time
+
+# Simulate an attacker trying passwords with fast hashing
+passwords = ['password', '123456', 'qwerty', 'letmein', 'monkey',
+             'dragon', 'master', 'abc123', 'password123', 'target']
+
+target_hash = hashlib.sha256(b'password123').hexdigest()
+
+start = time.time()
+for pw in passwords:
+    h = hashlib.sha256(pw.encode()).hexdigest()
+    if h == target_hash:
+        elapsed = time.time() - start
+        print(f'CRACKED! Password is: {pw}')
+        print(f'Time: {elapsed*1000:.3f}ms')
+        print(f'Tried {passwords.index(pw)+1} passwords')
+        break
+
+print()
+print('Now imagine trying 10 billion passwords instead of 10.')
+print('At 100 million hashes/sec (one GPU), that takes 100 seconds.')
+print('Your password is cracked in under 2 minutes.')
+"
+```
+
+That's the problem. HKDF and SHA-256 are **too fast**. An attacker with a GPU can try billions of passwords per second.
+
+## The solution: make it slow on purpose
+
+```
+The idea is simple:
+
+  Fast hash (SHA-256):
+    password → key              instantly
+    Attacker: 1,000,000,000 attempts/second
+
+  Slow hash (PBKDF2, 100K iterations):
+    password → hash → hash → ... (100K times) → key
+    Attacker: 10 attempts/second
+
+  Memory-hard hash (Argon2):
+    password → fill 64MB of RAM with data → key
+    Attacker: needs 64MB PER attempt
+    GPU with 1000 cores but only 8GB RAM?
+    → only 125 parallel attempts, not 1000
+```
+
 ## Real-life analogy: the vault door
 
-Imagine two kinds of locks:
+```
+Regular door lock (HKDF):
+  Insert key → door opens instantly
+  If someone has a lockpick (GPU), they try 1 billion keys/second
+  ┌──┐
+  │🚪│ → click → open
+  └──┘
+
+Bank vault door (PBKDF2):
+  Insert key → wait 1 second → door opens
+  Lockpick still works, but only 1 attempt/second
+  ┌──┐
+  │🚪│ → click → ⏰ 1 second → open
+  └──┘
+
+Vault door + weight requirement (Argon2):
+  Insert key → must also carry 64kg weight → wait → door opens
+  Lockpick works, but you need one 64kg weight per attempt
+  Can't try 1000 doors in parallel unless you have 64,000 kg of weights
+  ┌──┐
+  │🚪│ → click → 🏋️ 64kg → ⏰ 1 second → open
+  └──┘
+```
+
+The delay and memory cost don't bother legitimate users (one login = one derivation). They devastate attackers who need billions of attempts.
+
+## See the difference yourself
+
+```sh
+# FAST: SHA-256 — how many per second?
+python3 -c "
+import hashlib, time
+start = time.time()
+for i in range(1_000_000):
+    hashlib.sha256(b'password123').digest()
+elapsed = time.time() - start
+rate = 1_000_000 / elapsed
+print(f'SHA-256:   {rate:,.0f} hashes/second')
+print(f'  10 billion passwords cracked in: {10_000_000_000/rate:.0f} seconds')
+"
+
+# SLOW: PBKDF2 100K iterations
+python3 -c "
+import hashlib, os, time
+salt = os.urandom(16)
+start = time.time()
+for i in range(10):
+    hashlib.pbkdf2_hmac('sha256', b'password123', salt, 100_000)
+elapsed = time.time() - start
+rate = 10 / elapsed
+print(f'PBKDF2:    {rate:,.1f} hashes/second')
+print(f'  10 billion passwords cracked in: {10_000_000_000/rate/3600/24/365:.0f} years')
+"
+```
+
+Run both. The difference is dramatic — millions per second vs a handful per second.
+
+## What does a password KDF actually do?
+
+All password KDFs do the same thing conceptually:
 
 ```
-Regular lock (HKDF):
-  Turn key → door opens instantly
-  Fine when the key is a random 256-bit secret.
-  Nobody can guess it.
-
-Vault door with time lock (PBKDF2/Argon2):
-  Turn key → wait 1 second → door opens
-  The delay is intentional.
-  If someone tries every possible key,
-  they can only try 1 per second instead of billions.
+Input:  "password123" (weak, guessable)
+Output: 7f3a9b2c4d... (32 bytes, looks random, usable as encryption key)
 ```
 
-Passwords are terrible keys. People use "password123", "qwerty", dictionary words. An attacker with a GPU can try **billions** of HKDF derivations per second. But if each attempt takes 1 second (PBKDF2) or requires 1GB of RAM (Argon2), brute force becomes impractical.
+Same as HKDF — but **intentionally slow**. The slowness IS the security feature.
 
-## Why HKDF is wrong for passwords
-
-HKDF is **fast by design** — it's meant for deriving keys from already-strong secrets (like a DH shared secret). Speed is a feature there.
-
-For passwords, speed is the enemy:
-
-```
-HKDF:
-  "password123" → key in 0.000001 seconds
-  Attacker tries 1 billion passwords/second on a GPU
-  8-character password cracked in: minutes
-
-PBKDF2 (100,000 iterations):
-  "password123" → key in 0.1 seconds
-  Attacker tries 10 passwords/second on a GPU
-  8-character password cracked in: centuries
-
-Argon2 (1GB memory):
-  "password123" → key in 1 second + needs 1GB RAM per attempt
-  Attacker needs 1TB RAM for 1000 parallel attempts
-  8-character password cracked in: heat death of the universe
-```
+Think of it this way:
+- HKDF is a machine that instantly turns a secret into a key
+- A password KDF is the same machine, but with a **speed limiter bolted on**
+- The speed limiter wastes CPU time (PBKDF2) or RAM (Argon2) on purpose
+- A legitimate user calls it once (1 second delay — barely noticeable)
+- An attacker calls it billions of times (1 second × 1 billion = 31 years)
 
 ## The three password KDFs
 

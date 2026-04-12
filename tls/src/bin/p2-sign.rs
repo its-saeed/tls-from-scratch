@@ -18,6 +18,8 @@ enum Command {
         key_path: String,
         #[arg(long)]
         file_path: String,
+        #[arg(long = "timestamp")]
+        include_timestamp: bool
     },
     /// Verify a file's signature
     Verify {
@@ -27,6 +29,8 @@ enum Command {
         file: String,
         #[arg(long)]
         signature: String,
+        #[arg(long)]
+        max_age_secs: Option<u64>
     },
 }
 
@@ -41,41 +45,66 @@ fn generate_keypair(key_path: &str) {
     println!("Public key (hex):     {}", hex::encode(public_key.to_bytes()));
 }
 
-fn sign_file(key_path: &str, file_path: &str) {
+fn sign_file(key_path: &str, file_path: &str, include_timestamp: bool) {
     let key_bytes: [u8; 32] = std::fs::read(key_path).expect("Can't read keyfile").try_into().unwrap();
     let mut signing_key = SigningKey::from_bytes(&key_bytes);
     let file_data = std::fs::read(file_path).expect("Can't read filep data");
 
-    let signature = signing_key.sign(&file_data);
+    let timestamp = if include_timestamp {
+        Some(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs())
+    } else {
+        None
+    };
+
+    let mut to_sign = Vec::new();
+    if let Some(ts) = timestamp {
+        println!("{}", hex::encode(ts.to_be_bytes()));
+        to_sign.extend_from_slice(&ts.to_be_bytes());
+    }
+
+    to_sign.extend_from_slice(&file_data);
+
+    let signature = signing_key.sign(&to_sign);
     let sig_path = format!("{file_path}.sig");
-    std::fs::write(&sig_path, signature.to_bytes()).unwrap();
+
+    let mut signature = signature.to_vec();
+    signature.extend_from_slice(&timestamp.unwrap().to_be_bytes());
+    std::fs::write(&sig_path, &signature).unwrap();
 
     println!("Signed: {file_path}");
-    println!("Signature: {sig_path} ({} bytes)", signature.to_bytes().len());
-    println!("Signature (hex): {}", hex::encode(signature.to_bytes()));
+    println!("Signature: {sig_path} ({} bytes)", signature.len());
+    println!("Signature (hex): {}", hex::encode(signature));
 }
 
-fn verify(pubkey: &str, file: &str, signature: &str) {
+fn verify(pubkey: &str, file: &str, signature: &str, max_age_secs: Option<u64>) -> Result<(), String> {
     let pub_bytes: [u8; 32] = std::fs::read(pubkey).expect("Can't read public key").try_into().unwrap();
     let verifying_key = VerifyingKey::from_bytes(&pub_bytes).expect("Failed to create the public key");
 
     let file_data = std::fs::read(file).unwrap();
-    let sig_bytes: [u8; 64] = std::fs::read(signature).expect("Can't read signature").try_into().unwrap();
-    let signature = Signature::from_bytes(&sig_bytes);
+    let sig_file_bytes = std::fs::read(signature).unwrap();
+    let (signature_bytes, timestamp ) = sig_file_bytes.split_at(64);
+    //let sig_bytes: [u8; 64] = std::fs::read(signature).expect("Can't read signature").try_into().unwrap();
+    let signature = Signature::from_bytes(&signature_bytes.try_into().unwrap());
 
-    match verifying_key.verify_strict(&file_data, &signature) {
-        Ok(()) => {
-            println!("✓ Signature valid");
-            println!("  File: {file}");
-            println!("  Signed by: {}", hex::encode(pub_bytes));
-        }
-        Err(e) => {
-            println!("✗ Signature INVALID");
-            println!("  File: {file}");
-            println!("  Error: {e}");
-            std::process::exit(1);
-        }
+    let mut file_data_with_ts = timestamp.to_vec();
+    file_data_with_ts.extend_from_slice(&file_data);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+
+    println!("{}", hex::encode(timestamp));
+    let timestamp = u64::from_be_bytes(timestamp.try_into().unwrap());
+    if  timestamp > now { return Err("timestamp is in the future".into()); }
+    if now - timestamp > max_age_secs.unwrap() {
+        return Err(format!("signature expired ({} seconds old)", now - timestamp));
     }
+    // Verify signature
+    verifying_key.verify_strict(&file_data_with_ts, &signature)
+        .map_err(|_| "signature invalid".to_string())?;
+
+    // Check timestamp
+    Ok(())
 }
 
 fn main() {
@@ -84,11 +113,11 @@ fn main() {
         Command::Keygen { key_path } => {
             generate_keypair(key_path);
         }
-        Command::Sign { key_path, file_path} => {
-            sign_file(key_path, file_path);
+        Command::Sign { key_path, file_path, include_timestamp} => {
+            sign_file(key_path, file_path, *include_timestamp);
         }
-        Command::Verify { pubkey, file, signature } => {
-            verify(pubkey, file, signature)
+        Command::Verify { pubkey, file, signature, max_age_secs } => {
+            verify(pubkey, file, signature, max_age_secs.to_owned()).unwrap()
         }
     }
 }
