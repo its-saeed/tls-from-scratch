@@ -219,22 +219,42 @@ openssl x509 -in ca.pem -text -noout | grep -A2 "Subject"
 # Issuer of server.pem should match Subject of ca.pem
 ```
 
-## Subject Alternative Names (SANs)
+## Why do we pass domain names to `CertificateParams::new()`?
 
-Modern TLS uses SANs instead of the CN field:
+You might have noticed: when we created certificates above, we passed domain names like `"localhost"` and `"127.0.0.1"` to `CertificateParams::new()`. What does `rcgen` do with them?
+
+It puts them in the **Subject Alternative Names (SANs)** field — the list of domains and IPs this certificate is valid for. When a browser connects to `https://localhost`, it checks the SANs (not the Subject/CN field) to verify the hostname matches.
 
 ```
-Certificate for a web server:
-  SANs: DNS:example.com, DNS:www.example.com, IP:93.184.216.34
+Old way (deprecated):
+  Subject: CN=localhost          ← browsers used to check this
+  SANs: (empty)
 
-Certificate for localhost development:
-  SANs: DNS:localhost, IP:127.0.0.1
+Modern way (what rcgen does):
+  Subject: CN=localhost          ← mostly ignored by browsers now
+  SANs: DNS:localhost, IP:127.0.0.1  ← THIS is what browsers check
+```
+
+If your cert's SANs don't include the hostname you're connecting to, the browser rejects it — even if the CN matches. That's why we pass the domain names when creating the cert.
+
+A single cert can cover multiple domains:
+
+```rust
+// One cert for all your domains:
+let params = CertificateParams::new(vec![
+    "example.com".into(),
+    "www.example.com".into(),
+    "api.example.com".into(),
+    "127.0.0.1".into(),
+])?;
+// rcgen automatically creates SANs for all of these
 ```
 
 ```sh
-# Check SANs of a real website:
+# See SANs of a real website — Google's cert covers dozens of domains:
 echo | openssl s_client -connect google.com:443 2>/dev/null | \
   openssl x509 -noout -ext subjectAltName
+# DNS:*.google.com, DNS:google.com, DNS:*.youtube.com, ...
 ```
 
 ## When you need this
