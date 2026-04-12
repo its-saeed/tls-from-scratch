@@ -1,5 +1,17 @@
 # Lesson 4: Diffie-Hellman Key Exchange (X25519)
 
+> **Alice's Bookstore — Chapter 4**
+>
+> Alice now understands encryption (Lesson 2) — she can scramble data so Eve can't read it. But there's a chicken-and-egg problem:
+>
+> *"To encrypt, my customer and I need the same secret key. But how do we agree on a key? If I send it over the network, Eve sees it. If I encrypt it... I need a key to encrypt the key. It's turtles all the way down!"*
+>
+> Bob smiles: *"This is the most elegant trick in cryptography. You and the customer can agree on a shared secret by exchanging messages in public — and even if Eve records every single byte you send, she STILL can't figure out the secret."*
+>
+> *"That sounds impossible."*
+>
+> *"It's called Diffie-Hellman. Let me show you with paint."*
+
 ## Real-life analogy: mixing paint
 
 Alice and Bob want to agree on a shared secret color. Eve is watching everything they send.

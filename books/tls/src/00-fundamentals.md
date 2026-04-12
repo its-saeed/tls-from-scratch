@@ -1,5 +1,19 @@
 # Lesson 0: Cryptography Fundamentals
 
+> **The Story of Alice's Bookstore**
+>
+> Alice runs a small online bookstore from her apartment. She sells rare books and ships worldwide. Her customers type their credit card numbers into her website, send her messages, and download digital books.
+>
+> One day, her friend Bob — a security researcher — sits down with her at a coffee shop.
+>
+> *"Alice, your website sends everything in plaintext. Anyone on this Wi-Fi can see your customers' credit cards."*
+>
+> *"What? How?"*
+>
+> *"Let me show you the problems — and how cryptography solves each one."*
+>
+> This is where our story begins. Each lesson solves one of Alice's problems. By the end, her bookstore will be fully secure.
+
 Before writing any code, you need to understand the vocabulary and core concepts. Every lesson that follows builds on these ideas.
 
 ## Real-life analogy: sending a secret letter

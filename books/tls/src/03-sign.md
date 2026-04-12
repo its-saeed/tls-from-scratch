@@ -1,5 +1,21 @@
 # Lesson 3: Asymmetric Crypto & Signatures (Ed25519)
 
+> **Alice's Bookstore — Chapter 3**
+>
+> Alice starts emailing order confirmations to customers. One day, a customer named Dave calls:
+>
+> *"I got an email from 'Alice's Bookstore' saying my order was cancelled and asking me to re-enter my credit card on a new link. Is that real?"*
+>
+> It wasn't. Someone — let's call her Mallory — sent a fake email pretending to be Alice. The email looked identical to Alice's real ones. Dave almost entered his credit card on Mallory's phishing site.
+>
+> *"How can my customers tell that a message is really from ME and not a fake?"*
+>
+> Bob explains: *"You need a digital signature. You sign your messages with a private key that only you have. Anyone can verify the signature using your public key. Mallory can't forge it because she doesn't have your private key."*
+>
+> *"So it's like a wax seal that only I can stamp?"*
+>
+> *"Exactly."*
+
 ## Real-life analogy: the wax seal
 
 In medieval times, kings sealed letters with a wax stamp pressed from a unique signet ring:

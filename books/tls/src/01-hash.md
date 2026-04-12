@@ -1,5 +1,17 @@
 # Lesson 1: Hashing (SHA-256)
 
+> **Alice's Bookstore — Chapter 1**
+>
+> Alice sells digital books as PDF downloads. A customer named Carol emails her:
+>
+> *"The book I downloaded is 400 pages, but my friend got 402 pages from the same link. Did someone tamper with it? How do I know I got the real file?"*
+>
+> Bob suggests: *"Publish a fingerprint of each file on your website. Customers download the book, compute the fingerprint themselves, and compare. If they match — the file is intact. If not — something changed it."*
+>
+> *"A fingerprint... of a file?"*
+>
+> *"It's called a hash."*
+
 ## Real-life analogy: the fingerprint
 
 Every person has a unique fingerprint. You can't reconstruct a person from their fingerprint, but you can verify "is this the same person?" by comparing prints.

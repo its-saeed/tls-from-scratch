@@ -1,5 +1,23 @@
 # Lesson 2: Symmetric Encryption (ChaCha20-Poly1305)
 
+> **Alice's Bookstore — Chapter 2**
+>
+> Alice's bookstore is growing. Customers now buy books by sending their credit card numbers through her website. One afternoon, Bob shows her something alarming at the coffee shop:
+>
+> *"I'm on the same Wi-Fi as you. Watch this."*
+>
+> He opens a packet sniffer and shows her the raw network traffic. There it is — a customer's credit card number, in plaintext.
+>
+> *"Eve doesn't even need to be a skilled hacker. Anyone on this Wi-Fi can see everything your customers send."*
+>
+> *"How do I hide it?"*
+>
+> *"Encryption. You scramble the data so only you and the customer can read it. Everyone else sees random noise."*
+>
+> *"But we'd need to agree on a secret key first... how?"*
+>
+> *"One problem at a time. First, let's learn how encryption works. We'll solve the key-sharing problem in Lesson 4."*
+
 ## Real-life analogy: the lockbox with a shared key
 
 Alice and Bob each have a copy of the same key for a lockbox:
