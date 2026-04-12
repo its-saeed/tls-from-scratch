@@ -16,10 +16,10 @@
 
 - [Key Derivation (HKDF)](./05-kdf.md)
 - [Password-Based KDFs (PBKDF2/Argon2)](./06-password-kdf.md)
+- [Project: Password Manager Vault](./p4-password-vault.md)
 - [Certificates & Trust (X.509)](./07-certs.md)
 - [Certificate Generation (rcgen)](./08-cert-generation.md)
 - [Project: Certificate Inspector](./p3-cert-inspector.md)
-- [Project: Password Manager Vault](./p4-password-vault.md)
 
 # Phase 3: Build a Mini-TLS
 
