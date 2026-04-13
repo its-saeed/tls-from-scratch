@@ -2,9 +2,65 @@
 
 > **Prerequisites**: Lesson 8 (cert generation), Lesson 13 (handshake), Lesson 14 (tokio-rustls), P8 (CA). The ultimate TLS capstone.
 
+## What is this?
+
+When you're debugging API calls, you need to see the actual HTTP requests and responses — but they're encrypted with TLS. Tools like [mitmproxy](https://mitmproxy.org), [Charles Proxy](https://www.charlesproxy.com), and [Fiddler](https://www.telerik.com/fiddler) solve this by intercepting HTTPS traffic.
+
+This project uses **every TLS concept** you've learned:
+
+```
+Concept you learned          How it's used here
+──────────────────────────────────────────────────────
+Lesson 2: Encryption         Decrypt client traffic, re-encrypt to server
+Lesson 3: Signatures         Sign fake certificates
+Lesson 7: Certificates       Understand what makes a cert trusted
+Lesson 8: Cert generation    Generate fake certs on-the-fly for any domain
+Lesson 13: TLS handshake     Two handshakes — one with client, one with server
+Lesson 14: tokio-rustls      Real TLS for both connections
+P8: Certificate Authority    Your CA signs the fake certs
+```
+
+## Try it with existing tools
+
+```sh
+# Install mitmproxy to see how it works:
+# macOS: brew install mitmproxy
+# Linux: pip3 install mitmproxy
+
+# Start it:
+mitmproxy --listen-port 8080
+
+# In another terminal, use it as a proxy:
+curl -x http://127.0.0.1:8080 -k https://example.com
+# mitmproxy shows: GET https://example.com/ → 200 (1256 bytes)
+# It decrypted the HTTPS traffic!
+
+# How? It generated a fake cert for example.com, signed by ~/.mitmproxy/mitmproxy-ca-cert.pem
+ls ~/.mitmproxy/
+# mitmproxy-ca-cert.pem  ← the CA cert (install this to avoid warnings)
+```
+
+You're building the same thing from scratch.
+
 ## What you're building
 
-A proxy that sits between a client and any HTTPS server, decrypting all traffic so you can inspect it — like a mini [mitmproxy](https://mitmproxy.org). This is the tool you used for debugging JSON-RPC requests.
+A proxy that sits between a client and any HTTPS server, decrypting all traffic so you can inspect it — like a mini mitmproxy.
+
+```sh
+# Start your proxy:
+cargo run -p tls --bin p11-intercept -- --port 8080
+
+# Use it:
+curl -x http://127.0.0.1:8080 --cacert ca.crt https://example.com
+# Output (from proxy):
+#   [CONNECT] example.com:443
+#   [→] GET / HTTP/1.1
+#       Host: example.com
+#   [←] HTTP/1.1 200 OK
+#       Content-Type: text/html
+#       Content-Length: 1256
+#       <html>...</html>
+```
 
 ```
 Browser                 Your Proxy              Real Server
