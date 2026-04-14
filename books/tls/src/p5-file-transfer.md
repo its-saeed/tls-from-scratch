@@ -55,23 +55,23 @@ cargo run -p tls --bin p5-transfer -- send \
 ```
 Sender                                  Receiver
   │                                        │
-  │── DH public key (32B) ───────────────►│
-  │◄── DH public key (32B) ──────────────│  Handshake
-  │◄── signature (64B) ──────────────────│  (Lessons 9-10)
+  │── DH public key (32B) ────────────────►│
+  │◄── DH public key (32B) ────────────────│  Handshake
+  │◄── signature (64B) ────────────────────│  (Lessons 9-10)
   │                                        │
   │  verify signature ✓                    │
   │  derive c2s_key, s2c_key               │
   │                                        │
-  │── [len][encrypted metadata] ─────────►│  Step 1: what file?
+  │── [len][encrypted metadata] ──────────►│  Step 1: what file?
   │                                        │  filename, size, SHA-256
   │                                        │
-  │── [len][encrypted chunk 1] ──────────►│  Step 2: file data
-  │── [len][encrypted chunk 2] ──────────►│  4KB chunks
-  │── [len][encrypted chunk 3] ──────────►│  counter nonces
+  │── [len][encrypted chunk 1] ───────────►│  Step 2: file data
+  │── [len][encrypted chunk 2] ───────────►│  4KB chunks
+  │── [len][encrypted chunk 3] ───────────►│  counter nonces
   │── ...                                  │
   │── [len][encrypted final chunk] ───────►│
   │                                        │
-  │◄── [len][encrypted "OK" or "ERR"] ───│  Step 3: verification
+  │◄── [len][encrypted "OK" or "ERR"] ─────│  Step 3: verification
   │                                        │  receiver checks SHA-256
 ```
 
@@ -183,12 +183,12 @@ You already built this. Copy (or import) the handshake code:
 fn sender_handshake(stream: &mut TcpStream, server_pubkey: &[u8; 32])
     -> (ChaCha20Poly1305, ChaCha20Poly1305)
 {
-    // 1. Generate ephemeral DH key
-    // 2. Send our public key (32 bytes)
-    // 3. Read server's public key (32 bytes)
-    // 4. Read server's signature (64 bytes)
-    // 5. Verify signature
-    // 6. Compute shared secret
+    // 1. Generate ephemeral X25519 DH key pair
+    // 2. Send our DH public key (32 bytes)
+    // 3. Read server's ephemeral DH public key (32 bytes) — NOT the identity key
+    // 4. Read server's Ed25519 signature (64 bytes) over its DH public key
+    // 5. Verify signature using server_pubkey (the identity key passed as argument)
+    // 6. Compute shared secret = DH(our_secret, server_dh_public)
     // 7. Derive c2s_key and s2c_key via HKDF
     // Return (c2s_cipher, s2c_cipher)
     todo!("Reuse handshake from Lesson 10")

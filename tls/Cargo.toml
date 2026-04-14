@@ -13,7 +13,6 @@ rand_core = { version = "0.6", features = ["getrandom"] }
 x25519-dalek = { version = "2", features = ["static_secrets"] }
 hkdf = "0.12"
 rustls-pemfile = "2"
-x509-parser = "0.16"
 hmac = "0.12"
 sha1 = "0.10"
 data-encoding = "2"  # for base32 decoding
@@ -25,3 +24,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rpassword = "7"  # for reading passwords without echoing to terminal
 bytes = "1.11.1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
+tokio-rustls = "0.26"
+rustls = "0.23"
+webpki-roots = "0.26"
+x509-parser = "0.16"
+anyhow = "1.0.102"

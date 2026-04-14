@@ -31,6 +31,7 @@ fn main() {
     let certs = rustls_pemfile::certs(&mut BufReader::new(f)).collect::<Result<Vec<_>, _>>().unwrap();
     let der_bytes = &certs[0];
     let (_, cert) = x509_parser::parse_x509_certificate(der_bytes).unwrap();
-    println!("Subject: {}", cert.subject());
+    println!("{}", cert.serial);
+    println!("{}", cert.validity().time_to_expiration().unwrap().whole_days());
     println!("Public key algorithm: {}", cert.public_key().algorithm.algorithm);
 }
