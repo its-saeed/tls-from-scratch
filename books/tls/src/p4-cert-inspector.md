@@ -493,3 +493,104 @@ cargo run -p tls --bin p3-cert-inspector -- inspect --json google.com
 ```
 
 This is useful for monitoring scripts that parse the output programmatically.
+
+## Extension: turn your inspector into a scanner
+
+Once the inspector works, it's one step from the tools security teams actually use ([testssl.sh](https://testssl.sh), [SSL Labs](https://www.ssllabs.com/ssltest/)). Every commercial scanner is built from the same primitives you already have: protocol/cipher introspection from rustls, expiry and SAN checks from x509-parser, plus a handful of security-header checks.
+
+```
+┌──────────────────────────────────────────────────────────┐
+│  What a TLS scanner checks                               │
+│                                                          │
+│  ✓ Protocol version  — TLS 1.3? 1.2? Old 1.0? (bad!)     │
+│  ✓ Cipher suite      — modern AEAD? or weak RC4? (bad!)  │
+│  ✓ Certificate       — expired? wrong hostname?          │
+│  ✓ Key exchange      — ephemeral DH (forward secrecy)?   │
+│  ✓ HSTS header       — does the site force HTTPS?        │
+│  ✓ Certificate chain — complete? trusted root?           │
+└──────────────────────────────────────────────────────────┘
+```
+
+Try with existing tools first to see the shape of the data:
+
+```sh
+echo | openssl s_client -connect google.com:443 2>/dev/null | \
+  grep -E "Protocol|Cipher|Server Temp Key"
+curl -sI https://google.com | grep -i strict-transport
+
+# Known-broken test sites (badssl.com):
+echo | openssl s_client -connect expired.badssl.com:443 2>/dev/null | \
+  openssl x509 -noout -dates
+echo | openssl s_client -connect tls-v1-0.badssl.com:1010 2>/dev/null | grep Protocol
+```
+
+Extract the negotiated parameters after your TLS connect:
+
+```rust
+let tls = tls_connect(host, port).await?;
+let (_, conn) = tls.get_ref();
+let protocol = conn.protocol_version().unwrap();
+let cipher   = conn.negotiated_cipher_suite().unwrap();
+let certs    = conn.peer_certificates().unwrap();
+```
+
+After the handshake, reuse the same TLS stream to fetch HTTP headers:
+
+```rust
+let request = format!("GET / HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n");
+tls.write_all(request.as_bytes()).await?;
+let mut response = vec![0u8; 8192];
+let n = tls.read(&mut response).await.unwrap_or(0);
+let response = String::from_utf8_lossy(&response[..n]);
+
+let has_hsts = response.lines()
+    .any(|l| l.to_lowercase().starts_with("strict-transport-security"));
+```
+
+### Exercise 5: Full scanner output
+
+Combine everything into one report:
+
+```
+TLS Scan: google.com:443
+─────────────────────────
+Protocol:     TLS 1.3 ✓
+Cipher:       TLS_AES_256_GCM_SHA384 ✓
+Key exchange: X25519 (forward secrecy ✓)
+
+Certificate:
+  Subject:    *.google.com
+  Issuer:     GTS CA 1C3
+  Expires in: 62 days ✓
+  SANs:       *.google.com, google.com, *.youtube.com, ...
+
+HTTP headers:
+  HSTS:       max-age=31536000 ✓
+
+Grade: A
+```
+
+Assign a grade with a simple rubric:
+
+```rust
+fn grade(protocol_ok: bool, cipher_ok: bool, cert_days: i64, has_hsts: bool) -> &'static str {
+    if !protocol_ok || cert_days < 0 { return "F"; }
+    if !cipher_ok                    { return "C"; }
+    if cert_days < 30                { return "B"; }
+    if !has_hsts                     { return "B+"; }
+    "A"
+}
+```
+
+Run it against `expired.badssl.com`, `self-signed.badssl.com`, `tls-v1-0.badssl.com:1010` — each should drop to a different grade for a different reason.
+
+### Exercise 6: Comparison table
+
+Scan multiple hosts and emit a side-by-side table. This is the shape most monitoring dashboards want:
+
+```
+Domain           Protocol  Cipher           Expires  HSTS  Grade
+google.com       TLS 1.3   AES-256-GCM      62 days  ✓     A
+example.com      TLS 1.3   AES-128-GCM      90 days  ✗     B+
+old-site.com     TLS 1.2   AES-128-CBC      EXPIRED  ✗     F
+```

@@ -29,7 +29,7 @@ Situations where you can't use the openssl CLI:
     "A new microservice spins up and needs a cert immediately"
     → can't wait for a human to run openssl
   
-  The intercepting proxy (Project P11):
+  The intercepting proxy (Project P9):
     "Client connects to google.com — I need a fake cert for google.com NOW"
     → must generate a cert in milliseconds, for any domain, on the fly
   

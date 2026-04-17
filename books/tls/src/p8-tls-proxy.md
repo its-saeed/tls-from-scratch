@@ -1,6 +1,6 @@
 # Project: TLS Termination Proxy
 
-> **Prerequisites**: Lesson 14 (tokio-rustls), P8 (Certificate Authority).
+> **Prerequisites**: Lesson 14 (tokio-rustls), P7 (Certificate Authority).
 
 ## What is this?
 
@@ -37,7 +37,7 @@ Without proxy:
 python3 -m http.server 8000 &
 
 # Start the TLS proxy:
-cargo run -p tls --bin p10-proxy -- \
+cargo run -p tls --bin p8-proxy -- \
   --listen 0.0.0.0:8443 \
   --backend 127.0.0.1:8000 \
   --cert server.crt --key server.key
@@ -65,7 +65,7 @@ curl -k https://127.0.0.1:8443/
 ### Step 0: Project setup
 
 ```sh
-touch tls/src/bin/p10-proxy.rs
+touch tls/src/bin/p8-proxy.rs
 ```
 
 ```rust
@@ -136,7 +136,7 @@ That's it. `copy_bidirectional` handles both directions. rustls transparently de
 python3 -m http.server 8000 &
 
 # Start the proxy:
-cargo run -p tls --bin p10-proxy -- \
+cargo run -p tls --bin p8-proxy -- \
   --listen 127.0.0.1:8443 \
   --backend 127.0.0.1:8000 \
   --cert certs/server.crt --key certs/server.key

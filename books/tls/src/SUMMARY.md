@@ -19,7 +19,7 @@
 - [Project: Password Manager Vault](./p3-password-vault.md)
 - [Certificates & Trust (X.509)](./07-certs.md)
 - [Certificate Generation (rcgen)](./08-cert-generation.md)
-- [Project: Certificate Inspector](./p4-cert-inspector.md)
+- [Project: Certificate Inspector & Scanner](./p4-cert-inspector.md)
 
 # Phase 3: Build a Mini-TLS
 
@@ -35,14 +35,15 @@
 - [Real TLS (tokio-rustls)](./14-real-tls.md)
 - [HTTPS Client](./15-https-client.md)
 - [Project: HTTPS Server](./p6-https-server.md)
-- [Project: TLS Scanner](./p7-tls-scanner.md)
 
 # Phase 5: Capstone Projects
 
-- [Certificate Authority](./p8-certificate-authority.md)
-- [mTLS Service Mesh](./p9-mtls-service-mesh.md)
-- [TLS Termination Proxy](./p10-tls-proxy.md)
-- [HTTPS Intercepting Proxy](./p11-intercepting-proxy.md)
+- [Certificate Authority & Service Mesh](./p7-certificate-authority.md)
+- [TLS Termination Proxy](./p8-tls-proxy.md)
+- [HTTPS Intercepting Proxy](./p9-intercepting-proxy.md)
+- [Session Keys (Delegated Signing)](./p10-session-keys.md)
+- [Noise Handshake (mini WireGuard)](./p11-noise-handshake.md)
+- [Password-Authenticated Key Exchange](./p12-pake.md)
 
 # Design Challenges
 

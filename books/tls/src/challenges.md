@@ -378,7 +378,7 @@ These challenges test your ability to **combine** cryptographic primitives into 
 <details>
 <summary>Hints</summary>
 
-- P8 (CA): issue certs with CN like `free:alice` or `pro:bob`
+- P7 (CA): issue certs with CN like `free:alice` or `pro:bob`
 - Lesson 11 (mTLS): require client cert on the server
 - After handshake, extract CN from client cert → parse tier
 - Rate limit based on tier

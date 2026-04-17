@@ -10,20 +10,20 @@ You're building a private CA as a CLI tool:
 
 ```sh
 # Initialize the CA (do once):
-cargo run -p tls --bin p8-ca -- init --name "My Company CA"
+cargo run -p tls --bin p7-ca -- init --name "My Company CA"
 # Created: ca.key (KEEP SECRET), ca.crt (distribute to clients)
 
 # Issue a server certificate:
-cargo run -p tls --bin p8-ca -- issue --domain api.internal.com --days 90
+cargo run -p tls --bin p7-ca -- issue --domain api.internal.com --days 90
 # Created: api.internal.com.key, api.internal.com.crt
 # Signed by: My Company CA
 # Expires: 2026-07-13
 
 # Issue another:
-cargo run -p tls --bin p8-ca -- issue --domain db.internal.com --days 90
+cargo run -p tls --bin p7-ca -- issue --domain db.internal.com --days 90
 
 # List all issued certs:
-cargo run -p tls --bin p8-ca -- list
+cargo run -p tls --bin p7-ca -- list
 # api.internal.com   expires 2026-07-13  VALID
 # db.internal.com    expires 2026-07-13  VALID
 
@@ -32,7 +32,7 @@ openssl verify -CAfile ca.crt api.internal.com.crt
 # api.internal.com.crt: OK
 
 # Revoke a cert:
-cargo run -p tls --bin p8-ca -- revoke api.internal.com
+cargo run -p tls --bin p7-ca -- revoke api.internal.com
 # Revoked.
 ```
 
@@ -63,7 +63,7 @@ cargo run -p tls --bin p8-ca -- revoke api.internal.com
 
 ```sh
 mkdir -p tls/src/bin
-touch tls/src/bin/p8-ca.rs
+touch tls/src/bin/p7-ca.rs
 ```
 
 ```rust
@@ -128,7 +128,7 @@ fn init_ca(name: &str) {
 Test:
 
 ```sh
-cargo run -p tls --bin p8-ca -- init --name "Acme Corp CA"
+cargo run -p tls --bin p7-ca -- init --name "Acme Corp CA"
 ls -la ca.key ca.crt ca-db.json
 openssl x509 -in ca.crt -text -noout | head -15
 # Issuer: CN = Acme Corp CA
@@ -176,7 +176,7 @@ fn issue_cert(domain: &str, days: u32) {
 Test:
 
 ```sh
-cargo run -p tls --bin p8-ca -- issue --domain api.internal.com
+cargo run -p tls --bin p7-ca -- issue --domain api.internal.com
 openssl verify -CAfile ca.crt certs/api.internal.com.crt
 # api.internal.com.crt: OK
 
@@ -205,15 +205,15 @@ struct CertRecord {
 ### Step 4: List and revoke
 
 ```sh
-cargo run -p tls --bin p8-ca -- list
+cargo run -p tls --bin p7-ca -- list
 # Domain              Issued      Expires     Status
 # api.internal.com    2026-04-13  2026-07-12  VALID
 # db.internal.com     2026-04-13  2026-07-12  VALID
 
-cargo run -p tls --bin p8-ca -- revoke --domain api.internal.com
+cargo run -p tls --bin p7-ca -- revoke --domain api.internal.com
 # Revoked: api.internal.com
 
-cargo run -p tls --bin p8-ca -- list
+cargo run -p tls --bin p7-ca -- list
 # Domain              Issued      Expires     Status
 # api.internal.com    2026-04-13  2026-07-12  REVOKED
 # db.internal.com     2026-04-13  2026-07-12  VALID
@@ -260,3 +260,100 @@ openssl verify -CAfile root.crt -untrusted intermediate.crt server.crt
 ### Exercise 4: Certificate renewal
 
 Add a `renew` command that issues a new cert for an existing domain (new key pair, new expiry) and marks the old one as superseded in the database.
+
+## Extension: a CA is the backbone of an mTLS service mesh
+
+Your CA doesn't just issue server certs. Issue one per *service* and you've built the core of what Istio, Linkerd, and every corporate zero-trust network do: **services prove their identity to each other** using certificates from a shared internal CA.
+
+```
+┌──────────────────────────────────────────────────────────┐
+│  Without mTLS:                                           │
+│    Any process can call the payment service.             │
+│    A compromised pod sends: POST /charge $10,000         │
+│    Payment service: "OK!" (no identity check)            │
+│                                                          │
+│  With mTLS:                                              │
+│    Payment service requires a client certificate.        │
+│    Compromised pod has no valid cert → handshake fails.  │
+│    Only order-service (with its cert) can call it.       │
+└──────────────────────────────────────────────────────────┘
+```
+
+Two services, both signed by your CA, mutually authenticating:
+
+```
+┌──────────────────┐          mTLS          ┌──────────────────┐
+│  Order Service   │ ◄─────────────────────► │  Payment Service │
+│  cert: order.crt │  Both present certs     │  cert: payment.crt│
+│  key:  order.key │  Both verify against CA │  key:  payment.key│
+└──────────────────┘                         └──────────────────┘
+              Both signed by: Your CA (this project)
+```
+
+### Requiring client certificates on the server
+
+One line difference from P6: `with_client_cert_verifier` instead of `with_no_client_auth`:
+
+```rust
+use rustls::server::WebPkiClientVerifier;
+
+let ca_certs = load_ca_certs("ca.crt");
+let client_verifier = WebPkiClientVerifier::builder(Arc::new(ca_certs))
+    .build()
+    .unwrap();
+
+let config = ServerConfig::builder()
+    .with_client_cert_verifier(client_verifier)   // ← requires client cert
+    .with_single_cert(server_certs, server_key)?;
+```
+
+### Presenting a client certificate
+
+```rust
+let config = ClientConfig::builder()
+    .with_root_certificates(ca_root_store)
+    .with_client_auth_cert(client_certs, client_key)?;
+```
+
+### From authentication to authorization
+
+The TLS handshake tells you *who*. Your application decides *what they can do*. After the handshake, read the peer's cert and enforce a policy:
+
+```rust
+let (_, conn) = tls_stream.get_ref();
+let peer_certs = conn.peer_certificates().unwrap();
+let (_, cert) = X509Certificate::from_der(&peer_certs[0]).unwrap();
+let peer_name = extract_cn(&cert);   // e.g. "order.internal"
+
+match (method, path) {
+    ("POST", "/charge") if peer_name == "order.internal" => { /* allowed */ }
+    ("POST", "/charge")                                  => respond_403("forbidden"),
+    _ => respond_404(),
+}
+```
+
+### Exercise 5: Two-service mTLS
+
+Issue `order.internal` and `payment.internal` certs from your CA. Run the payment service with client-cert verification on. Run the order service as a client presenting its cert. Prove it works (connection succeeds) and that an unauthorized client (no cert) is rejected during the handshake — before your app code even runs.
+
+### Exercise 6: Authorization matrix
+
+Add a third service (`inventory.internal`). Define the matrix in a file:
+
+```toml
+# mesh-policy.toml
+[payment]
+accepts = ["order"]
+
+[inventory]
+accepts = ["order"]
+
+[order]
+accepts = []   # entry point — nobody calls it directly
+```
+
+Load it at startup. For each incoming connection, extract peer CN, check the matrix, 403 if not allowed. This is roughly how Istio AuthorizationPolicy works.
+
+### Exercise 7: Rotate the CA
+
+The hardest operational problem in a real mesh. Generate a new CA. Issue a new cert for one service from the new CA while others still trust only the old CA. Observe the break. Fix it by having every service trust *both* CAs during a rollover window, then drop the old CA.
